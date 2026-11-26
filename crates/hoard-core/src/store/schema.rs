@@ -331,4 +331,70 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (book_id, name)
     );
     "#,
+    // 13: full-text search (Word Hoard SPEC, "Library model"): books by
+    // title, author, series, publisher, tags and description; annotations by
+    // text, note and chapter. Accents are ignored ("Asatru" finds "Ásatrú").
+    // Triggers keep both indexes in step with their tables.
+    r#"
+    CREATE VIRTUAL TABLE book_fts USING fts5(
+        title, author, series, publisher, tags, description,
+        tokenize = 'unicode61 remove_diacritics 2'
+    );
+    INSERT INTO book_fts (rowid, title, author, series, publisher, tags, description)
+        SELECT b.id, coalesce(b.user_title, b.title), coalesce(b.user_author, b.author, ''),
+               coalesce(b.series, ''), coalesce(b.publisher, ''),
+               coalesce((SELECT group_concat(name, ' ') FROM book_tag t WHERE t.book_id = b.id), ''),
+               coalesce(b.description, '')
+        FROM book b;
+    CREATE TRIGGER book_fts_insert AFTER INSERT ON book BEGIN
+        INSERT INTO book_fts (rowid, title, author, series, publisher, tags, description)
+        VALUES (new.id, coalesce(new.user_title, new.title), coalesce(new.user_author, new.author, ''),
+                coalesce(new.series, ''), coalesce(new.publisher, ''),
+                coalesce((SELECT group_concat(name, ' ') FROM book_tag t WHERE t.book_id = new.id), ''),
+                coalesce(new.description, ''));
+    END;
+    CREATE TRIGGER book_fts_update AFTER UPDATE ON book BEGIN
+        DELETE FROM book_fts WHERE rowid = old.id;
+        INSERT INTO book_fts (rowid, title, author, series, publisher, tags, description)
+        VALUES (new.id, coalesce(new.user_title, new.title), coalesce(new.user_author, new.author, ''),
+                coalesce(new.series, ''), coalesce(new.publisher, ''),
+                coalesce((SELECT group_concat(name, ' ') FROM book_tag t WHERE t.book_id = new.id), ''),
+                coalesce(new.description, ''));
+    END;
+    CREATE TRIGGER book_fts_delete AFTER DELETE ON book BEGIN
+        DELETE FROM book_fts WHERE rowid = old.id;
+    END;
+    CREATE TRIGGER book_tag_fts_insert AFTER INSERT ON book_tag BEGIN
+        UPDATE book_fts SET tags = (SELECT group_concat(name, ' ') FROM book_tag WHERE book_id = new.book_id)
+        WHERE rowid = new.book_id;
+    END;
+    CREATE TRIGGER book_tag_fts_delete AFTER DELETE ON book_tag BEGIN
+        UPDATE book_fts SET tags = coalesce((SELECT group_concat(name, ' ') FROM book_tag WHERE book_id = old.book_id), '')
+        WHERE rowid = old.book_id;
+    END;
+
+    CREATE VIRTUAL TABLE annotation_fts USING fts5(
+        text, note, chapter,
+        tokenize = 'unicode61 remove_diacritics 2'
+    );
+    INSERT INTO annotation_fts (rowid, text, note, chapter)
+        SELECT id, coalesce(user_text, device_text, ink_text, ''), coalesce(user_note, device_note, ink_note, ''),
+               coalesce(chapter_title, '')
+        FROM annotation;
+    CREATE TRIGGER annotation_fts_insert AFTER INSERT ON annotation BEGIN
+        INSERT INTO annotation_fts (rowid, text, note, chapter)
+        VALUES (new.id, coalesce(new.user_text, new.device_text, new.ink_text, ''),
+                coalesce(new.user_note, new.device_note, new.ink_note, ''), coalesce(new.chapter_title, ''));
+    END;
+    CREATE TRIGGER annotation_fts_update AFTER UPDATE OF user_text, device_text, ink_text, user_note,
+            device_note, ink_note, chapter_title ON annotation BEGIN
+        DELETE FROM annotation_fts WHERE rowid = old.id;
+        INSERT INTO annotation_fts (rowid, text, note, chapter)
+        VALUES (new.id, coalesce(new.user_text, new.device_text, new.ink_text, ''),
+                coalesce(new.user_note, new.device_note, new.ink_note, ''), coalesce(new.chapter_title, ''));
+    END;
+    CREATE TRIGGER annotation_fts_delete AFTER DELETE ON annotation BEGIN
+        DELETE FROM annotation_fts WHERE rowid = old.id;
+    END;
+    "#,
 ];

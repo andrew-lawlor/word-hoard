@@ -6,6 +6,7 @@ mod markup;
 mod pen;
 mod query;
 mod schema;
+mod search;
 mod vocab;
 
 pub use books::{
@@ -15,6 +16,7 @@ pub use markup::{MarkupJob, page_words_path};
 pub use pen::GLOSSES_SETTING;
 pub(crate) use pen::apply_pen_marks;
 pub use query::{AnnotationFilter, DeviceDeletePolicy, SidebarCounts, Tag, View, VocabStatus};
+pub use search::{AnnotationHit, BookHit, SearchResults};
 pub use vocab::{Sighting, Vocab, VocabDetail};
 
 use std::path::{Path, PathBuf};
@@ -448,10 +450,13 @@ impl Library {
         search: Option<&str>,
         sort: BookSort,
     ) -> Result<Vec<Book>> {
-        let pattern = search
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(query::like_pattern);
+        // The search box matches what's on a book's spine and in its tags,
+        // not its description (that would flood the grid).
+        let pattern = search.and_then(|s| {
+            query::fts_query(s, Some(&["title", "author", "series", "publisher", "tags"]))
+        });
+        // Input with no words at all (only punctuation) matches nothing.
+        let no_words = search.is_some_and(|s| !s.trim().is_empty()) && pattern.is_none();
         let order = match sort {
             BookSort::Recent => "last_activity IS NULL, last_activity DESC, title COLLATE NOCASE",
             BookSort::Title => "title COLLATE NOCASE",
@@ -479,11 +484,11 @@ impl Library {
             WHERE NOT b.hidden
               AND (?1 IS NULL OR b.id = ?1)
               AND (NOT ?2 OR st.annotations > 0 OR st.words > 0)
-              AND (?3 IS NULL OR coalesce(b.user_title, b.title) LIKE ?3 ESCAPE '\\'
-                   OR coalesce(b.user_author, b.author, '') LIKE ?3 ESCAPE '\\')
+              AND (?3 IS NULL OR b.id IN (SELECT rowid FROM book_fts WHERE book_fts MATCH ?3))
+              AND NOT ?4
             ORDER BY {order}"
         ))?;
-        let books = stmt.query_map(params![id, active_only, pattern], |r| {
+        let books = stmt.query_map(params![id, active_only, pattern, no_words], |r| {
             Ok(Book {
                 id: r.get(0)?,
                 title: r.get(1)?,

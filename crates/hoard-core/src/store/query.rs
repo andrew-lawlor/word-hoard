@@ -128,6 +128,34 @@ impl DeviceDeletePolicy {
 const ACTIVE: &str = "a.status IN ('inbox', 'kept')";
 
 /// `LIKE` pattern matching `s` anywhere, with wildcards escaped by `\`.
+/// An FTS5 query from what someone typed: every word must match, the last
+/// one as a prefix (so results follow typing), each word quoted so FTS
+/// syntax in the input (`AND`, `"`, `*`, `-`) is just text. `columns`
+/// limits the match to those columns. `None` when there are no words.
+pub(crate) fn fts_query(input: &str, columns: Option<&[&str]>) -> Option<String> {
+    let words: Vec<&str> = input
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let last = words.len().checked_sub(1)?;
+    let terms: Vec<String> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            if i == last {
+                format!("\"{w}\"*")
+            } else {
+                format!("\"{w}\"")
+            }
+        })
+        .collect();
+    let query = terms.join(" ");
+    Some(match columns {
+        Some(cols) => format!("{{{}}} : ({query})", cols.join(" ")),
+        None => query,
+    })
+}
+
 pub(crate) fn like_pattern(s: &str) -> String {
     let escaped = s
         .replace('\\', "\\\\")

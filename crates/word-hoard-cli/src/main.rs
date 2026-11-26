@@ -52,6 +52,15 @@ enum Command {
     },
     /// Show what the library contains.
     Library,
+    /// Search books and highlights across the library.
+    Search {
+        /// Words to find; the last one may be the start of a word.
+        #[arg(required = true)]
+        words: Vec<String>,
+        /// How many books and how many highlights to show.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Import a Calibre library: books, metadata, tags, ratings and files.
     /// Calibre's own library is only read.
     ImportCalibre {
@@ -177,6 +186,7 @@ fn main() -> Result<()> {
         Command::Report { path, output } => report(&path, output.as_deref()),
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
+        Command::Search { words, limit } => search(&library_path, &words.join(" "), limit),
         Command::ImportCalibre {
             path,
             link,
@@ -537,6 +547,38 @@ fn add(
         "\n{new} new books, {attached} files for books already in the library, \
          {known} already there, {failed} failed"
     );
+    Ok(())
+}
+
+fn search(library_path: &Path, text: &str, limit: usize) -> Result<()> {
+    let lib = Library::open(library_path)?;
+    let results = lib.search(text, limit)?;
+    if results.books.is_empty() && results.annotations.is_empty() {
+        println!("Nothing matches “{text}”.");
+        return Ok(());
+    }
+    if !results.books.is_empty() {
+        println!("Books");
+        for b in &results.books {
+            match &b.author {
+                Some(author) => println!("  {} — {author}", b.title),
+                None => println!("  {}", b.title),
+            }
+        }
+    }
+    if !results.annotations.is_empty() {
+        println!(
+            "{}Highlights",
+            if results.books.is_empty() { "" } else { "\n" }
+        );
+        for a in &results.annotations {
+            let place = match &a.chapter {
+                Some(chapter) => format!("{} · {chapter}", a.book_title),
+                None => a.book_title.clone(),
+            };
+            println!("  {}\n    {place}", a.snippet.replace('\n', " "));
+        }
+    }
     Ok(())
 }
 
