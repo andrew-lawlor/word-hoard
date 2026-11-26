@@ -4,6 +4,7 @@ description = "Read-only access to Kobo e-readers: detection, database snapshots
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 hoard-core.workspace = true

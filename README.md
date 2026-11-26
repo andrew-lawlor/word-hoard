@@ -32,3 +32,7 @@ cargo run -p word-hoard -- kobo export --device /tmp/fake-kobo
 | `hoard-core` | Domain model (`Annotation`, `BookInfo`) and Markdown/JSON exporters |
 | `hoard-kobo` | Kobo detection, database snapshots, schema-tolerant reader |
 | `word-hoard` | The `word-hoard` command-line tool |
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).

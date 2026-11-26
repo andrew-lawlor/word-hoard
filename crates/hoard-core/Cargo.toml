@@ -4,6 +4,7 @@ description = "Word Hoard domain model and exporters"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
