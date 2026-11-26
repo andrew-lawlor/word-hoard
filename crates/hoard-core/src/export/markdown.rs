@@ -4,6 +4,8 @@
 
 use std::fmt::Write;
 
+use chrono::{DateTime, Utc};
+
 use crate::model::{Annotation, AnnotationKind, BookAnnotations, BookInfo};
 
 pub struct MarkdownOptions {
@@ -46,7 +48,7 @@ pub fn render_book(entry: &BookAnnotations, opts: &MarkdownOptions) -> String {
         let _ = writeln!(out, "status: {}", status.as_str());
     }
     if let Some(last) = &book.last_read {
-        yaml_field(&mut out, "last_read", date_part(last));
+        yaml_field(&mut out, "last_read", &day(last));
     }
     if !book.on_device {
         out.push_str("on_device: false\n");
@@ -88,7 +90,7 @@ pub fn render_book(entry: &BookAnnotations, opts: &MarkdownOptions) -> String {
                 let _ = write!(line, " ({:.0}%)", progress * 100.0);
             }
             if let Some(created) = &mark.created {
-                let _ = write!(line, " · {}", date_part(created));
+                let _ = write!(line, " · {}", day(created));
             }
             if mark.hidden {
                 line.push_str(" · hidden on device");
@@ -125,17 +127,17 @@ fn render_annotation(out: &mut String, ann: &Annotation) {
         (None, Some(note)) => {
             let _ = writeln!(out, "**Note:** {} ^{id}\n", note.trim());
         }
+        (None, None) if ann.kind == AnnotationKind::Markup => {
+            let _ = writeln!(out, "*Handwritten markup (the ink isn't exported yet)* ^{id}\n");
+        }
         (None, None) => {
             let _ = writeln!(out, "*(no text)* ^{id}\n");
         }
     }
 
     let mut meta: Vec<String> = Vec::new();
-    if ann.kind == AnnotationKind::Markup {
-        meta.push("handwritten markup".into());
-    }
     if let Some(created) = &ann.created {
-        meta.push(date_part(created).to_string());
+        meta.push(day(created));
     }
     // Yellow is the default highlight colour, so it is not worth repeating.
     if let Some(color) = ann.color.as_deref().filter(|c| *c != "yellow") {
@@ -184,11 +186,8 @@ pub fn block_id(source_id: &str) -> String {
     format!("kobo-{id}")
 }
 
-fn date_part(timestamp: &str) -> &str {
-    match timestamp.get(..10) {
-        Some(date) => date,
-        None => timestamp,
-    }
+fn day(timestamp: &DateTime<Utc>) -> String {
+    timestamp.format("%Y-%m-%d").to_string()
 }
 
 fn yaml_field(out: &mut String, key: &str, value: &str) {
@@ -208,6 +207,7 @@ fn yaml_str(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::model::{BookOrigin, Position, ReadStatus};
+    use chrono::TimeZone;
 
     fn book() -> BookInfo {
         BookInfo {
@@ -220,7 +220,7 @@ mod tests {
             series_index: None,
             percent_read: Some(40),
             read_status: Some(ReadStatus::Reading),
-            last_read: Some("2026-11-20T21:14:03Z".into()),
+            last_read: Some(Utc.with_ymd_and_hms(2026, 11, 20, 21, 14, 3).unwrap()),
             origin: BookOrigin::Sideloaded,
             on_device: true,
         }
@@ -236,7 +236,7 @@ mod tests {
             color: Some("yellow".into()),
             chapter: Some(chapter.into()),
             position: Position::default(),
-            created: Some("2026-11-02T10:00:00.000".into()),
+            created: Some(Utc.with_ymd_and_hms(2026, 11, 2, 10, 0, 0).unwrap()),
             modified: None,
             hidden: false,
         }

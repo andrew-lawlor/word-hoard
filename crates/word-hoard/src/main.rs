@@ -133,6 +133,15 @@ fn open(resolved: &Resolved) -> Result<(Snapshot, hoard_kobo::KoboDb)> {
     let snapshot = Snapshot::take(&resolved.db)
         .with_context(|| format!("could not copy {}", resolved.db.display()))?;
     let db = snapshot.open()?;
+    if let Some(version) = db.db_version()?
+        && !hoard_kobo::is_tested_db_version(version)
+    {
+        eprintln!(
+            "warning: Kobo database version {version} hasn't been tested yet (tested: {:?}). \
+             Reading it anyway; if anything looks wrong, please share `word-hoard kobo report`.",
+            hoard_kobo::TESTED_DB_VERSIONS
+        );
+    }
     Ok((snapshot, db))
 }
 
@@ -159,6 +168,9 @@ fn info(source: &Source) -> Result<()> {
     let stats = db.stats()?;
     let v = resolved.version.as_ref();
     println!("Kobo at {}", resolved.label);
+    if let Some(name) = v.and_then(VersionInfo::model_name) {
+        println!("  model        {name}");
+    }
     if let Some(v) = v {
         println!("  serial       {}", v.serial);
         println!("  firmware     {}", v.firmware.as_deref().unwrap_or("unknown"));
@@ -178,7 +190,10 @@ fn info(source: &Source) -> Result<()> {
         stats.annotated_books
     );
     if stats.markups > 0 {
-        println!("  markups      {} (handwritten, exported as placeholders)", stats.markups);
+        println!("  markups      {} handwritten (exported as placeholders for now)", stats.markups);
+    }
+    if stats.notebooks > 0 {
+        println!("  notebooks    {} (not exported yet)", stats.notebooks);
     }
     if stats.hidden > 0 {
         println!("  hidden       {} deleted on device (export with --include-hidden)", stats.hidden);
@@ -190,6 +205,7 @@ fn export(args: &ExportArgs) -> Result<()> {
     let resolved = resolve(&args.source)?;
     let (_snapshot, db) = open(&resolved)?;
     let books = db.annotations(&resolved.source_tag, args.include_hidden)?;
+    hoard_kobo::ensure_not_on_kobo(&args.out)?;
     fs::create_dir_all(&args.out)
         .with_context(|| format!("could not create {}", args.out.display()))?;
 
@@ -227,7 +243,10 @@ fn report(args: &ReportArgs) -> Result<()> {
     let (_snapshot, db) = open(&resolved)?;
     let text = db.schema_report(resolved.version.as_ref())?;
     match &args.output {
-        Some(path) => write(path, &text)?,
+        Some(path) => {
+            hoard_kobo::ensure_not_on_kobo(path)?;
+            write(path, &text)?
+        }
         None => print!("{text}"),
     }
     Ok(())

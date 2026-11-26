@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// What kind of mark the reader left.
@@ -57,7 +58,10 @@ impl ReadStatus {
 /// to the library's EPUB later (CFI + text-quote selector, see SPEC.md).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Position {
-    /// Order of the chapter within the book, when the device records it.
+    /// The device's id for the chapter file (Kobo `ContentID`, with any
+    /// `#fragment`).
+    pub content_id: Option<String>,
+    /// Reading-order (spine) index of the chapter file, when known.
     pub chapter_index: Option<i64>,
     /// Device-reported progress value for the annotation (0.0–1.0).
     pub chapter_progress: Option<f64>,
@@ -82,9 +86,8 @@ pub struct Annotation {
     /// Chapter title, when the device knows it.
     pub chapter: Option<String>,
     pub position: Position,
-    /// Timestamps exactly as the device stored them.
-    pub created: Option<String>,
-    pub modified: Option<String>,
+    pub created: Option<DateTime<Utc>>,
+    pub modified: Option<DateTime<Utc>>,
     /// Deleted or hidden on the device but still present in its database.
     pub hidden: bool,
 }
@@ -102,7 +105,7 @@ pub struct BookInfo {
     /// 0–100.
     pub percent_read: Option<i64>,
     pub read_status: Option<ReadStatus>,
-    pub last_read: Option<String>,
+    pub last_read: Option<DateTime<Utc>>,
     pub origin: BookOrigin,
     /// False when annotations remain for a book that is no longer on the device.
     pub on_device: bool,

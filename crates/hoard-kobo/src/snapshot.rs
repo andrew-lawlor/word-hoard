@@ -17,6 +17,8 @@ impl Snapshot {
     /// temporary directory. The source files are only read.
     pub fn take(db: &Path) -> Result<Self> {
         let dir = tempfile::Builder::new().prefix("word-hoard-kobo-").tempdir()?;
+        // Even the scratch copy must not land on the device (e.g. via TMPDIR).
+        crate::ensure_not_on_kobo(dir.path())?;
         let path = dir.path().join("KoboReader.sqlite");
         fs::copy(db, &path)?;
         for suffix in ["-wal", "-shm"] {

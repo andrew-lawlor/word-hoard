@@ -73,6 +73,7 @@ fn exports_json_with_hidden() {
 fn info_and_report() {
     let (_tmp, root) = device();
     let info = String::from_utf8(run(&["kobo", "info", "--device"], &[&root]).stdout).unwrap();
+    assert!(info.contains("model        Kobo Libra Colour"), "{info}");
     assert!(info.contains("firmware     4.38.21908"), "{info}");
     assert!(info.contains("books        3 (2 sideloaded, 1 store)"), "{info}");
     assert!(info.contains("hidden       1"), "{info}");
@@ -80,6 +81,21 @@ fn info_and_report() {
     let report = String::from_utf8(run(&["kobo", "report", "--device"], &[&root]).stdout).unwrap();
     assert!(report.contains("CREATE TABLE Bookmark"));
     assert!(!report.contains("N418170000001"));
+}
+
+#[test]
+fn refuses_to_export_onto_the_kobo() {
+    let (_tmp, root) = device();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_word-hoard"))
+        .args(["kobo", "export", "--device"])
+        .arg(&root)
+        .arg("--out")
+        .arg(root.join("highlights"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("doesn't write to the device"));
+    assert!(!root.join("highlights").exists());
 }
 
 #[test]

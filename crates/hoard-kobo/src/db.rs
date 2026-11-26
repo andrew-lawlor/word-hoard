@@ -1,13 +1,16 @@
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use chrono::{DateTime, NaiveDateTime, Utc};
+use hoard_core::text::clean_opt;
 use hoard_core::{
     Annotation, AnnotationKind, BookAnnotations, BookInfo, BookOrigin, Position, ReadStatus,
 };
-use rusqlite::types::Value;
+use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, OpenFlags};
 
+use crate::chapters::{ChapterIndex, Resolution, position_key};
+use crate::paths::book_from_path;
 use crate::{Error, Result, VersionInfo};
 
 /// Reader over a Kobo database snapshot.
@@ -21,6 +24,8 @@ pub struct Stats {
     pub books: usize,
     pub sideloaded: usize,
     pub store: usize,
+    /// Stylus notebooks (`.nebo`), not exported yet.
+    pub notebooks: usize,
     pub annotated_books: usize,
     pub highlights: usize,
     pub notes: usize,
@@ -40,13 +45,10 @@ const BOOK_COLUMNS: &[&str] = &[
     "___PercentRead",
     "ReadStatus",
     "DateLastRead",
+    "MimeType",
 ];
 
-const CHAPTER_COLUMNS: &[&str] = &["ContentID", "Title", "VolumeIndex", "ContentType"];
-
-/// Table-of-contents entries for KEPUBs. Their ids are the chapter file's id
-/// plus `-1`, `-2`, …; their titles are the real chapter titles.
-const TOC_TYPE: i64 = 899;
+const CHAPTER_COLUMNS: &[&str] = &["ContentID", "ContentType", "Title", "VolumeIndex", "BookID"];
 
 const BOOKMARK_COLUMNS: &[&str] = &[
     "BookmarkID",
@@ -66,23 +68,8 @@ const BOOKMARK_COLUMNS: &[&str] = &[
     "Color",
 ];
 
-struct ChapterRow {
-    title: Option<String>,
-    index: Option<i64>,
-    content_type: Option<i64>,
-}
-
-impl ChapterRow {
-    fn is_toc(&self) -> bool {
-        self.content_type == Some(TOC_TYPE)
-    }
-}
-
-/// A resolved chapter: title for display, index for ordering.
-struct Chapter {
-    title: Option<String>,
-    index: Option<i64>,
-}
+/// Stylus notebooks are listed as books with a MyScript MIME type.
+const NOTEBOOK_MIME: &str = "application/vnd.myscript.nebo";
 
 impl KoboDb {
     /// Opens a database file. Call this on a [`crate::Snapshot`], never on the
@@ -104,27 +91,35 @@ impl KoboDb {
         Ok(rows.first().and_then(|r| r.int(0)))
     }
 
-    /// Every book on the device (`content` rows with `ContentType = 6`).
+    /// Every book on the device (`content` rows with `ContentType = 6`),
+    /// not counting stylus notebooks.
     pub fn books(&self) -> Result<Vec<BookInfo>> {
+        Ok(self.book_rows()?.into_iter().filter(|(_, notebook)| !notebook).map(|(b, _)| b).collect())
+    }
+
+    /// Books paired with whether each is a notebook.
+    fn book_rows(&self) -> Result<Vec<(BookInfo, bool)>> {
         let rows = self.select("content", BOOK_COLUMNS, "WHERE CAST(ContentType AS INTEGER) = 6")?;
         Ok(rows
             .iter()
             .filter_map(|r| {
                 let id = r.str(0)?;
-                Some(BookInfo {
+                let notebook = r.str(10).is_some_and(|m| m.starts_with(NOTEBOOK_MIME));
+                let book = BookInfo {
                     origin: origin_of(&id),
-                    title: r.str(1),
-                    authors: r.str(2).map(|a| split_authors(&a)).unwrap_or_default(),
-                    isbn: r.str(3),
-                    publisher: r.str(4),
-                    series: r.str(5),
-                    series_index: r.str(6),
+                    title: r.text(1),
+                    authors: r.text(2).map(|a| split_authors(&a)).unwrap_or_default(),
+                    isbn: r.text(3),
+                    publisher: r.text(4),
+                    series: r.text(5),
+                    series_index: r.text(6),
                     percent_read: r.int(7),
                     read_status: r.int(8).and_then(read_status),
-                    last_read: r.str(9),
+                    last_read: parse_kobo_date(r.str(9).as_deref()),
                     on_device: true,
                     device_id: id,
-                })
+                };
+                Some((book, notebook))
             })
             .collect())
     }
@@ -133,11 +128,16 @@ impl KoboDb {
     /// sorted by title. Books without annotations are left out. Hidden
     /// (deleted-on-device) annotations are only included when asked for.
     pub fn annotations(&self, source: &str, include_hidden: bool) -> Result<Vec<BookAnnotations>> {
-        let books: HashMap<String, BookInfo> =
-            self.books()?.into_iter().map(|b| (b.device_id.clone(), b)).collect();
-        let chapters = self.chapters()?;
+        let books = self.books()?;
+        let by_id: HashMap<&str, &BookInfo> = books.iter().map(|b| (b.device_id.as_str(), b)).collect();
+        let mut by_file_name: HashMap<&str, Vec<&BookInfo>> = HashMap::new();
+        for b in &books {
+            by_file_name.entry(file_name(&b.device_id)).or_default().push(b);
+        }
+        let indexes = self.chapter_indexes()?;
 
-        let mut by_book: HashMap<String, Vec<Annotation>> = HashMap::new();
+        // (annotation, chapter resolved exactly?) per book.
+        let mut by_book: HashMap<String, Vec<(Annotation, bool)>> = HashMap::new();
         for r in self.select("Bookmark", BOOKMARK_COLUMNS, "")? {
             let (Some(id), Some(volume)) = (r.str(0), r.str(1)) else {
                 continue;
@@ -146,43 +146,50 @@ impl KoboDb {
             if hidden && !include_hidden {
                 continue;
             }
-            let text = r.str(7);
-            let note = r.str(8);
+            let text = r.text(7);
+            let note = r.text(8);
             let kind = classify(r.str(13).as_deref(), text.is_some(), note.is_some());
-            let chapter = r.str(2).map(|cid| find_chapter(&chapters, &cid));
-            let chapter = chapter.as_ref();
+            let content_id = r.str(2);
+            let index = indexes.get(&volume);
+            let resolved = content_id.as_deref().and_then(|c| index?.resolve(c));
             let color = match kind {
-                AnnotationKind::Highlight | AnnotationKind::Note => r.int(14).map(color_name),
+                AnnotationKind::Highlight | AnnotationKind::Note => {
+                    Some(kobo_color(r.int(14).unwrap_or(0)).to_string())
+                }
                 _ => None,
             };
-            by_book.entry(volume).or_default().push(Annotation {
+            let annotation = Annotation {
                 source: source.to_string(),
                 source_id: id,
                 kind,
                 text,
                 note,
                 color,
-                chapter: chapter.and_then(|c| c.title.clone()),
+                chapter: resolved.map(|(title, _)| title.to_string()),
                 position: Position {
-                    chapter_index: chapter.and_then(|c| c.index),
+                    chapter_index: content_id.as_deref().and_then(|c| index?.spine_index(c)),
+                    content_id,
                     chapter_progress: r.float(9),
                     start_path: r.str(3),
                     start_offset: r.int(4),
                     end_path: r.str(5),
                     end_offset: r.int(6),
                 },
-                created: r.str(10),
-                modified: r.str(11),
+                created: parse_kobo_date(r.str(10).as_deref()),
+                modified: parse_kobo_date(r.str(11).as_deref()),
                 hidden,
-            });
+            };
+            let exact = resolved.is_none_or(|(_, how)| how == Resolution::Exact);
+            by_book.entry(volume).or_default().push((annotation, exact));
         }
 
         let mut out: Vec<BookAnnotations> = by_book
             .into_iter()
-            .map(|(volume, mut annotations)| {
-                annotations.sort_by(reading_order);
-                let book = books.get(&volume).cloned().unwrap_or_else(|| missing_book(volume));
-                BookAnnotations { book, annotations }
+            .map(|(volume, mut entries)| {
+                entries.sort_by_key(|(a, _)| reading_key(a));
+                carry_chapters_forward(&mut entries);
+                let book = find_book(&volume, &by_id, &by_file_name);
+                BookAnnotations { book, annotations: entries.into_iter().map(|(a, _)| a).collect() }
             })
             .collect();
         out.sort_by(|a, b| {
@@ -195,12 +202,14 @@ impl KoboDb {
     }
 
     pub fn stats(&self) -> Result<Stats> {
-        let books = self.books()?;
+        let rows = self.book_rows()?;
+        let books: Vec<&BookInfo> = rows.iter().filter(|(_, nb)| !nb).map(|(b, _)| b).collect();
         let annotated = self.annotations("", true)?;
         let mut stats = Stats {
             books: books.len(),
             sideloaded: books.iter().filter(|b| b.origin == BookOrigin::Sideloaded).count(),
             store: books.iter().filter(|b| b.origin == BookOrigin::Store).count(),
+            notebooks: rows.len() - books.len(),
             annotated_books: annotated.len(),
             ..Stats::default()
         };
@@ -245,15 +254,26 @@ impl KoboDb {
         Ok(out)
     }
 
-    fn chapters(&self) -> Result<BTreeMap<String, ChapterRow>> {
-        let rows = self.select("content", CHAPTER_COLUMNS, "WHERE CAST(ContentType AS INTEGER) <> 6")?;
-        Ok(rows
-            .iter()
-            .filter_map(|r| {
-                let row = ChapterRow { title: r.str(1), index: r.int(2), content_type: r.int(3) };
-                Some((r.str(0)?, row))
-            })
-            .collect())
+    /// Spine files and TOC entries, per book.
+    fn chapter_indexes(&self) -> Result<HashMap<String, ChapterIndex>> {
+        let rows = self.select(
+            "content",
+            CHAPTER_COLUMNS,
+            "WHERE CAST(ContentType AS INTEGER) IN (9, 899)",
+        )?;
+        let mut indexes: HashMap<String, ChapterIndex> = HashMap::new();
+        for r in rows {
+            let (Some(id), Some(book)) = (r.str(0), r.str(4)) else {
+                continue;
+            };
+            let ix = indexes.entry(book).or_default();
+            let index = r.int(3).unwrap_or(0);
+            match r.int(1) {
+                Some(9) => ix.add_spine_file(&id, index),
+                _ => ix.add_toc_entry(&id, &r.text(2).unwrap_or_default(), index),
+            }
+        }
+        Ok(indexes)
     }
 
     /// Selects `wanted` columns from `table`, substituting NULL for columns
@@ -277,11 +297,23 @@ impl KoboDb {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
             .query_map([], |r| {
-                (0..wanted.len()).map(|i| r.get::<_, Value>(i)).collect::<rusqlite::Result<Vec<_>>>()
+                (0..wanted.len()).map(|i| r.get_ref(i).map(owned)).collect::<rusqlite::Result<Vec<_>>>()
             })?
             .map(|r| r.map(Row))
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+}
+
+/// Copies a value out of SQLite. Kobo sometimes stores bytes that are not
+/// valid UTF-8 in text columns, so text is decoded lossily.
+fn owned(v: ValueRef<'_>) -> Value {
+    match v {
+        ValueRef::Null => Value::Null,
+        ValueRef::Integer(i) => Value::Integer(i),
+        ValueRef::Real(f) => Value::Real(f),
+        ValueRef::Text(t) => Value::Text(String::from_utf8_lossy(t).into_owned()),
+        ValueRef::Blob(b) => Value::Blob(b.to_vec()),
     }
 }
 
@@ -298,7 +330,7 @@ fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
 struct Row(Vec<Value>);
 
 impl Row {
-    /// Text value; blank strings count as missing.
+    /// Raw text value; blank strings count as missing.
     fn str(&self, i: usize) -> Option<String> {
         match &self.0[i] {
             Value::Text(t) if !t.trim().is_empty() => Some(t.clone()),
@@ -306,6 +338,11 @@ impl Row {
             Value::Real(f) => Some(f.to_string()),
             _ => None,
         }
+    }
+
+    /// Text for display: Unicode-normalised, whitespace tidied.
+    fn text(&self, i: usize) -> Option<String> {
+        clean_opt(self.str(i).as_deref())
     }
 
     fn int(&self, i: usize) -> Option<i64> {
@@ -336,6 +373,17 @@ impl Row {
     }
 }
 
+/// Kobo's mixed timestamp formats (`2026-08-13T21:24:36.152`,
+/// `2026-08-13T21:24:36Z`, `2026-08-13 21:24:36`), all UTC. The
+/// `0000-00-00T00:00:00.000` placeholder reads as no date.
+fn parse_kobo_date(s: Option<&str>) -> Option<DateTime<Utc>> {
+    let s = s?.trim().trim_end_matches('Z');
+    ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
+        .iter()
+        .find_map(|fmt| NaiveDateTime::parse_from_str(s, fmt).ok())
+        .map(|dt| dt.and_utc())
+}
+
 fn classify(kind: Option<&str>, has_text: bool, has_note: bool) -> AnnotationKind {
     match kind.map(str::to_ascii_lowercase).as_deref() {
         Some("dogear") => AnnotationKind::Bookmark,
@@ -350,14 +398,14 @@ fn classify(kind: Option<&str>, has_text: bool, has_note: bool) -> AnnotationKin
     }
 }
 
-/// Kobo colour codes as seen on colour models. To verify on a Libra Colour.
-fn color_name(code: i64) -> String {
+/// `Bookmark.Color` (verified on a Libra Colour). Kobos without a colour
+/// screen have no Color column; their highlights are the default, yellow.
+fn kobo_color(code: i64) -> &'static str {
     match code {
-        0 => "yellow".into(),
-        1 => "pink".into(),
-        2 => "blue".into(),
-        3 => "green".into(),
-        n => format!("colour {n}"),
+        1 => "pink",
+        2 => "blue",
+        3 => "green",
+        _ => "yellow",
     }
 }
 
@@ -388,32 +436,58 @@ fn is_uuid(s: &str) -> bool {
         })
 }
 
+/// `Attribution` holds either several names separated by commas (store
+/// books: "Andy Weir, Jürgen Langowski") or one name surname-first as calibre
+/// writes it ("Shaw, Gregory", "Lewis, C.S."). Two parts whose first is a
+/// single word are read as the latter and turned round.
 fn split_authors(attribution: &str) -> Vec<String> {
-    attribution
+    let parts: Vec<&str> = attribution
         .split(" & ")
-        .flat_map(|part| part.split(", "))
+        .flat_map(|part| part.split(','))
         .map(str::trim)
         .filter(|a| !a.is_empty())
-        .map(String::from)
-        .collect()
+        .collect();
+    match parts.as_slice() {
+        [last, first] if !last.contains(' ') && !attribution.contains(" & ") => {
+            vec![format!("{first} {last}")]
+        }
+        _ => parts.into_iter().map(String::from).collect(),
+    }
 }
 
-/// A book that has annotations in the database but no `content` row: it was
-/// removed from the device. Sideloaded ones get their file name as a title.
-fn missing_book(volume: String) -> BookInfo {
-    let title = volume.strip_prefix("file://").and_then(|path| {
-        let name = path.rsplit('/').next()?;
-        let stem = name
-            .strip_suffix(".kepub.epub")
-            .or_else(|| name.strip_suffix(".epub"))
-            .unwrap_or(name);
-        (!stem.is_empty()).then(|| stem.to_string())
-    });
+fn file_name(id: &str) -> &str {
+    id.rsplit('/').next().unwrap_or(id)
+}
+
+/// The book a bookmark's `VolumeID` belongs to: an exact match; else a book
+/// moved on the device (calibre re-sends to another folder but keeps the file
+/// name), when exactly one book has that file name; else a book removed from
+/// the device, described from its path.
+fn find_book(
+    volume: &str,
+    by_id: &HashMap<&str, &BookInfo>,
+    by_file_name: &HashMap<&str, Vec<&BookInfo>>,
+) -> BookInfo {
+    if let Some(book) = by_id.get(volume) {
+        return (*book).clone();
+    }
+    if volume.starts_with("file://")
+        && let Some([book]) = by_file_name.get(file_name(volume)).map(Vec::as_slice)
+    {
+        return (*book).clone();
+    }
+    let (title, author) = match volume.starts_with("file://") {
+        true => {
+            let (title, author) = book_from_path(volume);
+            (Some(title).filter(|t| !t.is_empty()), author)
+        }
+        false => (None, None),
+    };
     BookInfo {
-        origin: origin_of(&volume),
-        device_id: volume,
+        origin: origin_of(volume),
+        device_id: volume.to_string(),
         title,
-        authors: Vec::new(),
+        authors: author.map(|a| a.split(" & ").map(String::from).collect()).unwrap_or_default(),
         isbn: None,
         publisher: None,
         series: None,
@@ -425,52 +499,40 @@ fn missing_book(volume: String) -> BookInfo {
     }
 }
 
-/// Resolves a bookmark's `ContentID` (a chapter file) to a chapter.
-///
-/// Kobo keeps two kinds of rows per KEPUB chapter file: the file itself
-/// (ContentType 9, titled with its file name, `VolumeIndex` in spine order)
-/// and table-of-contents entries (ContentType 899, id + `-1`, real titles).
-/// Ordering comes from the file row; the title from the first TOC entry, or
-/// from the file row when its title is not just the file name.
-fn find_chapter(chapters: &BTreeMap<String, ChapterRow>, content_id: &str) -> Chapter {
-    let base = content_id.split('#').next().unwrap_or(content_id);
-    let file_row = chapters.get(base).filter(|c| !c.is_toc());
-    let toc_prefix = format!("{base}-");
-    let toc_row = chapters
-        .range(toc_prefix.clone()..)
-        .take_while(|(id, _)| id.starts_with(&toc_prefix))
-        .map(|(_, c)| c)
-        .find(|c| c.is_toc() && c.title.is_some())
-        .or_else(|| chapters.get(base).filter(|c| c.is_toc()));
-
-    let file_name = base.rsplit(['!', '/']).next().unwrap_or(base);
-    let title = toc_row
-        .and_then(|c| c.title.clone())
-        .or_else(|| file_row.and_then(|c| c.title.clone()).filter(|t| t != file_name));
-    let index = file_row.and_then(|c| c.index).or_else(|| toc_row.and_then(|c| c.index));
-    Chapter { title, index }
+/// Reading order within a book: spine position of the chapter file, then
+/// position within it, then creation time.
+fn reading_key(a: &Annotation) -> (i64, String, Option<DateTime<Utc>>) {
+    let p = &a.position;
+    (
+        p.chapter_index.unwrap_or(i64::MAX),
+        position_key(
+            p.start_path.as_deref().unwrap_or(""),
+            p.start_offset.unwrap_or(0),
+            p.chapter_progress.unwrap_or(0.0),
+        ),
+        a.created,
+    )
 }
 
-/// Chapter order, then position within the chapter (koboSpan ids such as
-/// `span#kobo\.12\.3` compare by their numbers), then offset, then time.
-fn reading_order(a: &Annotation, b: &Annotation) -> Ordering {
-    let chapter = |x: &Annotation| x.position.chapter_index.unwrap_or(i64::MAX);
-    let path = |x: &Annotation| x.position.start_path.as_deref().map(digit_runs).unwrap_or_default();
-    chapter(a)
-        .cmp(&chapter(b))
-        .then_with(|| path(a).cmp(&path(b)))
-        .then_with(|| a.position.start_offset.unwrap_or(0).cmp(&b.position.start_offset.unwrap_or(0)))
-        .then_with(|| {
-            let p = |x: &Annotation| x.position.chapter_progress.unwrap_or(0.0);
-            p(a).total_cmp(&p(b))
-        })
-        .then_with(|| a.created.cmp(&b.created))
-}
-
-fn digit_runs(s: &str) -> Vec<u64> {
-    s.split(|c: char| !c.is_ascii_digit())
-        .filter_map(|run| run.parse().ok())
-        .collect()
+/// For annotations whose chapter was only guessed from the start of a file
+/// holding several chapters, use the chapter of the closest preceding
+/// annotation in the same file whose chapter is known exactly. `entries`
+/// must already be in reading order.
+fn carry_chapters_forward(entries: &mut [(Annotation, bool)]) {
+    let file = |a: &Annotation| {
+        a.position.content_id.as_deref().unwrap_or("").split('#').next().unwrap_or("").to_string()
+    };
+    let mut last_exact: Option<(String, Option<String>)> = None;
+    for (annotation, exact) in entries.iter_mut() {
+        let f = file(annotation);
+        if *exact {
+            last_exact = Some((f, annotation.chapter.clone()));
+        } else if let Some((last_file, title)) = &last_exact
+            && *last_file == f
+        {
+            annotation.chapter = title.clone();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -497,11 +559,30 @@ mod tests {
     #[test]
     fn splits_authors() {
         assert_eq!(split_authors("Ursula K. Le Guin"), vec!["Ursula K. Le Guin"]);
-        assert_eq!(split_authors("A One, B Two & C Three"), vec!["A One", "B Two", "C Three"]);
+        assert_eq!(split_authors("Andy Weir, Jürgen Langowski"), vec!["Andy Weir", "Jürgen Langowski"]);
+        assert_eq!(split_authors("Shaw, Gregory"), vec!["Gregory Shaw"]);
+        assert_eq!(split_authors("Lewis, C.S."), vec!["C.S. Lewis"]);
+        assert_eq!(split_authors("Fitzgerald, Francis Scott"), vec!["Francis Scott Fitzgerald"]);
+        assert_eq!(split_authors("Homer & Caroline Alexander"), vec!["Homer", "Caroline Alexander"]);
+        assert_eq!(
+            split_authors("Marcella Hazan, Lidia Matticchio Bastianich, Victor Hazan"),
+            vec!["Marcella Hazan", "Lidia Matticchio Bastianich", "Victor Hazan"]
+        );
     }
 
     #[test]
-    fn span_paths_sort_numerically() {
-        assert!(digit_runs(r"span#kobo\.2\.1") < digit_runs(r"span#kobo\.12\.1"));
+    fn parses_mixed_kobo_dates() {
+        let a = parse_kobo_date(Some("2026-08-13T21:24:36.152")).unwrap();
+        let b = parse_kobo_date(Some("2026-08-13T21:24:36Z")).unwrap();
+        assert_eq!(a.timestamp(), b.timestamp());
+        assert!(parse_kobo_date(Some("2026-08-13 21:24:36")).is_some());
+        assert!(parse_kobo_date(Some("0000-00-00T00:00:00.000")).is_none());
+        assert!(parse_kobo_date(None).is_none());
+    }
+
+    #[test]
+    fn names_colours() {
+        let names: Vec<_> = (0..5).map(kobo_color).collect();
+        assert_eq!(names, ["yellow", "pink", "blue", "green", "yellow"]);
     }
 }

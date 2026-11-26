@@ -5,5 +5,6 @@
 
 pub mod export;
 pub mod model;
+pub mod text;
 
 pub use model::*;

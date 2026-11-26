@@ -86,7 +86,11 @@ fn legacy_schema_without_type_or_color() {
             AnnotationKind::Highlight
         ]
     );
-    assert!(dispossessed.annotations.iter().all(|a| a.color.is_none()));
+    // No Color column (Kobos without a colour screen): highlights are yellow.
+    for a in &dispossessed.annotations {
+        let expected = matches!(a.kind, AnnotationKind::Highlight | AnnotationKind::Note).then_some("yellow");
+        assert_eq!(a.color.as_deref(), expected);
+    }
 }
 
 #[test]

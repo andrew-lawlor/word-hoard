@@ -27,6 +27,52 @@ impl VersionInfo {
     }
 }
 
+impl VersionInfo {
+    /// Marketing name for model ids seen on real devices (from Kollate).
+    pub fn model_name(&self) -> Option<&'static str> {
+        match self.model_id.as_deref()?.rsplit('-').next()? {
+            "000000000390" => Some("Kobo Libra Colour"),
+            "000000000386" => Some("Kobo Clara 2E"),
+            "000000000393" => Some("Kobo Clara Colour"),
+            "000000000389" => Some("Kobo Elipsa 2E"),
+            _ => None,
+        }
+    }
+}
+
+/// `DbVersion`s read on real devices: 174 (Clara 2E, Elipsa 2E) and 176
+/// (Libra Colour). Others are read anyway, with a warning.
+pub const TESTED_DB_VERSIONS: &[i64] = &[174, 176];
+
+pub fn is_tested_db_version(version: i64) -> bool {
+    TESTED_DB_VERSIONS.contains(&version)
+}
+
+/// The root of the Kobo that `path` is on, if any. `path` need not exist
+/// yet: its nearest existing ancestor is checked, with symlinks resolved.
+pub fn kobo_root_containing(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let existing = absolute.ancestors().find(|p| p.exists())?;
+    let resolved = fs::canonicalize(existing).unwrap_or_else(|_| existing.to_path_buf());
+    resolved
+        .ancestors()
+        .find(|p| p.join(".kobo").join("KoboReader.sqlite").is_file())
+        .map(Path::to_path_buf)
+}
+
+/// Word Hoard never writes to a Kobo before M3. Everything that creates a
+/// file calls this first, so no export or temporary path lands on a device.
+pub fn ensure_not_on_kobo(path: &Path) -> Result<()> {
+    match kobo_root_containing(path) {
+        Some(_) => Err(Error::OnKobo(path.to_path_buf())),
+        None => Ok(()),
+    }
+}
+
 /// A mounted Kobo.
 #[derive(Debug, Clone)]
 pub struct KoboDevice {
@@ -129,8 +175,26 @@ mod tests {
         assert_eq!(v.serial, "N418170000001");
         assert_eq!(v.firmware.as_deref(), Some("4.38.21908"));
         assert_eq!(v.model_id.as_deref(), Some("00000000-0000-0000-0000-000000000390"));
+        assert_eq!(v.model_name(), Some("Kobo Libra Colour"));
         assert!(VersionInfo::parse("").is_none());
         assert_eq!(VersionInfo::parse("N1").unwrap().firmware, None);
+    }
+
+    #[test]
+    fn refuses_paths_on_a_kobo() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fs::create_dir_all(kobo.join(".kobo")).unwrap();
+        fs::write(kobo.join(".kobo/KoboReader.sqlite"), b"").unwrap();
+        let elsewhere = dir.path().join("Documents");
+        fs::create_dir_all(&elsewhere).unwrap();
+
+        assert!(ensure_not_on_kobo(&kobo).is_err());
+        assert!(ensure_not_on_kobo(&kobo.join("export.md")).is_err());
+        assert!(ensure_not_on_kobo(&kobo.join("Vault/Books/new")).is_err());
+        std::os::unix::fs::symlink(&kobo, elsewhere.join("link")).unwrap();
+        assert!(ensure_not_on_kobo(&elsewhere.join("link/out.json")).is_err());
+        assert!(ensure_not_on_kobo(&elsewhere.join("out.json")).is_ok());
     }
 
     #[test]

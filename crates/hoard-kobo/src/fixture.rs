@@ -93,9 +93,9 @@ pub fn create_db(path: &Path, schema: Schema) -> Result<()> {
     chapter(format!("{ch1}-1"), "899", "Chapter One", 0, SIDELOADED_ID)?;
     chapter(ch2.clone(), "9", "ch02.xhtml", 2, SIDELOADED_ID)?;
     chapter(format!("{ch2}-1"), "899", "Chapter Two", 1, SIDELOADED_ID)?;
-    // A plain chapter row whose title is a real title, not a file name.
     let piranesi_ch = format!("{STORE_ID}!part1.xhtml");
-    chapter(piranesi_ch.clone(), "9", "Part 1", 0, STORE_ID)?;
+    chapter(piranesi_ch.clone(), "9", "part1.xhtml", 0, STORE_ID)?;
+    chapter(format!("{piranesi_ch}-1"), "899", "Part 1", 0, STORE_ID)?;
 
     struct Mark<'a> {
         id: &'a str,
