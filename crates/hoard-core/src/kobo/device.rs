@@ -115,22 +115,72 @@ impl DeviceInfo {
     }
 }
 
-/// Mounted Kobos under the usual removable-media roots for this user.
+/// Mounted Kobos: every removable-media mount in `/proc/self/mounts`, so a
+/// Kobo is found wherever it's mounted, plus the usual removable-media roots
+/// for this user in case the mount table can't be read.
 pub fn find_mounted_kobos() -> Vec<PathBuf> {
+    let mut candidates = std::fs::read_to_string("/proc/self/mounts")
+        .map(|mounts| removable_mounts(&mounts))
+        .unwrap_or_default();
     let user = std::env::var("USER").unwrap_or_default();
-    let roots = [
+    for root in [
         PathBuf::from("/media").join(&user),
         PathBuf::from("/run/media").join(&user),
-    ];
-    let mut found: Vec<PathBuf> = roots
-        .iter()
-        .filter_map(|root| std::fs::read_dir(root).ok())
-        .flatten()
-        .filter_map(|e| e.ok().map(|e| e.path()))
+    ] {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            candidates.extend(entries.filter_map(|e| e.ok().map(|e| e.path())));
+        }
+    }
+    let mut found: Vec<PathBuf> = candidates
+        .into_iter()
         .filter(|p| is_kobo_mount(p))
         .collect();
     found.sort();
+    found.dedup();
     found
+}
+
+/// Filesystems a Kobo shows up as over USB. Only these mounts are checked,
+/// which also avoids touching network mounts (a stale one can hang).
+const REMOVABLE_FS: &[&str] = &["vfat", "msdos", "exfat", "fuseblk"];
+
+/// Mount points of removable-media filesystems in a `/proc/mounts` listing.
+fn removable_mounts(mounts: &str) -> Vec<PathBuf> {
+    mounts
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (_device, mount_point, fs_type) = (fields.next()?, fields.next()?, fields.next()?);
+            REMOVABLE_FS
+                .contains(&fs_type)
+                .then(|| PathBuf::from(unescape_mount(mount_point)))
+        })
+        .collect()
+}
+
+/// `/proc/mounts` writes space, tab, newline and backslash as octal (`\040`).
+fn unescape_mount(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 4 <= bytes.len() {
+            let octal = &bytes[i + 1..i + 4];
+            if octal.iter().all(|b| (b'0'..=b'7').contains(b)) {
+                let value = octal
+                    .iter()
+                    .fold(0u32, |acc, b| acc * 8 + u32::from(b - b'0'));
+                if let Ok(value) = u8::try_from(value) {
+                    out.push(value);
+                    i += 4;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
@@ -160,6 +210,24 @@ mod tests {
         // Ordinary locations are fine.
         assert!(ensure_not_on_kobo(&elsewhere.join("out.json")).is_ok());
         assert!(ensure_not_on_kobo(&dir.path().join("Library/new/library.db")).is_ok());
+    }
+
+    #[test]
+    fn finds_removable_mounts_and_unescapes_paths() {
+        let mounts = "\
+proc /proc proc rw 0 0
+/dev/sda1 /run/media/me/KOBOeReader vfat rw,nosuid 0 0
+/dev/sdb1 /mnt/My\\040Kobo exfat rw 0 0
+server:/x /mnt/nfs nfs4 rw 0 0
+";
+        assert_eq!(
+            removable_mounts(mounts),
+            [
+                PathBuf::from("/run/media/me/KOBOeReader"),
+                PathBuf::from("/mnt/My Kobo")
+            ]
+        );
+        assert_eq!(unescape_mount(r"a\134b\011c"), "a\\b\tc");
     }
 
     #[test]

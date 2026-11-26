@@ -144,10 +144,14 @@ fn explains_failures_on_untested_versions() {
     ));
     assert!(err.to_string().contains("version 999"), "{err}");
 
-    // On a tested version the plain error comes through.
+    // On a tested version the plain error comes through, naming the column.
     let (_dir, path) = modified_fixture("ALTER TABLE WordList RENAME COLUMN Text TO Word");
     let err = KoboDb::open_copy(&path).unwrap().snapshot().unwrap_err();
-    assert!(matches!(err, hoard_core::Error::Sqlite(_)), "{err}");
+    assert!(
+        matches!(&err, hoard_core::Error::MissingColumn { table, column }
+            if table == "WordList" && column == "Text"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -162,4 +166,61 @@ fn reads_kobos_without_colour() {
     assert_eq!(s.bookmarks.len(), 52);
     assert!(s.bookmarks.iter().all(|b| b.color == "yellow"));
     assert_eq!(s.words.len(), 12);
+}
+
+#[test]
+fn reads_databases_missing_optional_columns() {
+    // Columns a future (or older) firmware might lack. Kinds come from the
+    // rows themselves when there's no Type column.
+    let (_dir, path) = modified_fixture(
+        "ALTER TABLE Bookmark DROP COLUMN Type;
+         ALTER TABLE Bookmark DROP COLUMN DateModified;
+         ALTER TABLE Bookmark DROP COLUMN ChapterProgress;
+         ALTER TABLE content DROP COLUMN ImageId;
+         ALTER TABLE content DROP COLUMN Language;
+         ALTER TABLE WordList DROP COLUMN DictSuffix;",
+    );
+    let s = KoboDb::open_copy(&path).unwrap().snapshot().unwrap();
+    assert_eq!(s.bookmarks.len(), 52);
+    let count = |k: AnnotationKind| s.bookmarks.iter().filter(|b| b.kind == k).count();
+    assert_eq!(
+        (
+            count(AnnotationKind::Highlight),
+            count(AnnotationKind::Note),
+            count(AnnotationKind::Markup)
+        ),
+        (49, 2, 1)
+    );
+    assert!(s.bookmarks.iter().all(|b| b.chapter_title.is_some()));
+    assert_eq!(s.books.len(), 5);
+    assert!(s.books.iter().all(|b| b.image_id.is_none()));
+    assert_eq!(s.words.len(), 12);
+    assert!(s.words.iter().all(|w| w.language.is_none()));
+}
+
+#[test]
+fn reads_databases_without_optional_tables() {
+    let (_dir, path) = modified_fixture("DROP TABLE WordList");
+    let s = KoboDb::open_copy(&path).unwrap().snapshot().unwrap();
+    assert_eq!(s.bookmarks.len(), 52);
+    assert!(s.words.is_empty());
+}
+
+#[test]
+fn schema_report_has_tables_but_no_data() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/KoboReader.sqlite");
+    let db = KoboDb::open_copy(&path).unwrap();
+    let device = hoard_core::kobo::DeviceInfo::parse(
+        "N000000000123,4.9.77,4.45.23697,4.9.77,4.9.77,00000000-0000-0000-0000-000000000390",
+    )
+    .unwrap();
+    let report = db.schema_report(Some(&device)).unwrap();
+    assert!(report.contains("CREATE TABLE Bookmark"));
+    assert!(report.contains("-- DbVersion: 176"));
+    assert!(report.contains("-- model: Kobo Libra Colour (00000000-0000-0000-0000-000000000390)"));
+    assert!(report.contains("-- firmware: 4.45.23697"));
+    assert!(!report.contains("N000000000123"));
+    assert!(!report.contains("Nice simile"));
+    assert!(!report.contains("haggard"));
 }

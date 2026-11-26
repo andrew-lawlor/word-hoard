@@ -34,6 +34,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Print a Kobo's database layout (no rows, no serial number) to share in a compatibility report.
+    Report {
+        /// Kobo mount point or KoboReader.sqlite file.
+        path: PathBuf,
+        /// Write to this file instead of standard output.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Import highlights, notes and vocab into the library. Never writes to the Kobo.
     Import {
         /// Kobo mount point or KoboReader.sqlite file.
@@ -142,6 +150,7 @@ fn main() -> Result<()> {
     let library_path = cli.library.unwrap_or_else(default_library_path);
     match cli.command {
         Command::Inspect { path, json } => inspect(path, json),
+        Command::Report { path, output } => report(&path, output.as_deref()),
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
         Command::Models { action } => models(&library_path, action),
@@ -447,6 +456,19 @@ fn library(library_path: &Path) -> Result<()> {
 
 /// Reads a Kobo: its database and, when mounted, its notebooks and
 /// KOReader's highlights and words.
+fn report(path: &Path, output: Option<&Path>) -> Result<()> {
+    let db = KoboDb::open_copy(&find_kobo_db(path)?)?;
+    let text = db.schema_report(DeviceInfo::read(path).as_ref())?;
+    match output {
+        Some(file) => {
+            hoard_core::kobo::ensure_not_on_kobo(file)?;
+            std::fs::write(file, text)?;
+        }
+        None => print!("{text}"),
+    }
+    Ok(())
+}
+
 fn read_kobo(path: &Path) -> Result<KoboSnapshot> {
     let mut snapshot = KoboDb::open_copy(&find_kobo_db(path)?)?.snapshot()?;
     warn_if_untested(&snapshot);

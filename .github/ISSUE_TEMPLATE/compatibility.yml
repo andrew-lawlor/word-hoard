@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Word Hoard has only been tested on a Kobo Libra Colour (firmware 4.45, database version 176), so reports from other models help a lot, including "it just works".
+        Word Hoard has been tested on the Kobo Libra Colour, Clara Colour, Clara 2E and Elipsa 2E (database versions 174 and 176), so reports from other models help a lot, including "it just works".
 
         If you came here from Word Hoard's **Report** button, the first three fields are already filled in. Otherwise, run `word-hoard-cli inspect /media/$USER/KOBOeReader` (or `flatpak run --command=word-hoard-cli io.github.andrew_lawlor.WordHoard inspect /media/$USER/KOBOeReader`); its first two lines show the firmware and database version.
 
@@ -46,8 +46,14 @@ body:
     attributes:
       label: Details
       description: What looked wrong, or the error message. Which kinds of items you have (highlights, notes, stylus markups, Vocabulary Builder words) also helps.
+  - type: textarea
+    id: schema
+    attributes:
+      label: Database layout (optional)
+      description: The output of `word-hoard-cli report /media/$USER/KOBOeReader`. It lists the database's tables and columns only, with no books, highlights or serial number, and shows exactly what changed in a new firmware.
+      render: sql
   - type: input
     id: word-hoard_version
     attributes:
       label: Word Hoard version and package
-      placeholder: 0.1.4, Flatpak
+      placeholder: 0.8.0, Flatpak

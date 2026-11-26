@@ -12,6 +12,10 @@ pub enum Error {
         "{0} is on a Kobo e-reader. Word Hoard never writes to your Kobo; choose a location on this computer instead."
     )]
     OnKobo(PathBuf),
+    #[error("this Kobo's database has no {0} table")]
+    MissingTable(String),
+    #[error("this Kobo's database has no {column} column in its {table} table")]
+    MissingColumn { table: String, column: String },
     #[error(
         "this Kobo's database (version {version}) hasn't been tested with Word Hoard, and reading it failed: {source}"
     )]

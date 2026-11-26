@@ -2,7 +2,7 @@
 //! copied (with its WAL, if any) to a temp dir first, so the device can be
 //! ejected at any time and can never be written to.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::types::ValueRef;
@@ -10,6 +10,7 @@ use rusqlite::{Connection, Row};
 use tempfile::TempDir;
 
 use super::chapters::{ChapterIndex, Resolution};
+use super::device::DeviceInfo;
 use super::model::*;
 use crate::normalize::{clean_opt, parse_kobo_date};
 use crate::{Error, Result};
@@ -79,6 +80,38 @@ impl KoboDb {
             .query_row("SELECT version FROM DbVersion", [], |r| r.get(0))?)
     }
 
+    /// The database's table and index definitions, and nothing else: no
+    /// rows, no serial number. People share it so support for a firmware
+    /// version (and, later, writing to it) can be checked without their data.
+    pub fn schema_report(&self, device: Option<&DeviceInfo>) -> Result<String> {
+        let unknown = || "unknown".to_owned();
+        let model = device.map_or_else(unknown, |d| {
+            let id = d.model_id.clone().unwrap_or_else(unknown);
+            format!("{} ({id})", d.model_name())
+        });
+        let firmware = device
+            .and_then(|d| d.firmware.clone())
+            .unwrap_or_else(unknown);
+        let db_version = self
+            .db_version()
+            .map_or_else(|_| unknown(), |v| v.to_string());
+        let mut out = format!(
+            "-- Word Hoard Kobo schema report\n\
+             -- Table definitions only: no rows and no serial number.\n\
+             -- model: {model}\n-- firmware: {firmware}\n-- DbVersion: {db_version}\n\n"
+        );
+        let mut stmt = self.conn.prepare(
+            "SELECT sql FROM sqlite_master
+             WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+             ORDER BY type DESC, name",
+        )?;
+        for sql in stmt.query_map([], |r| r.get::<_, String>(0))? {
+            out.push_str(&sql?);
+            out.push_str(";\n\n");
+        }
+        Ok(out)
+    }
+
     /// Reads everything Word Hoard imports. On an untested database version, a
     /// failure is reported as [`Error::UntestedDb`] so the cause is clear.
     pub fn snapshot(&self) -> Result<KoboSnapshot> {
@@ -118,10 +151,18 @@ impl KoboDb {
 
     /// Notebooks (stylus models), listed like books with a MyScript type.
     fn notebooks(&self) -> Result<Vec<KoboBook>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT ContentID, Title, ImageId, DateLastRead FROM content
-             WHERE ContentType = 6 AND MimeType LIKE 'application/vnd.myscript.nebo%'",
+        if !self.table_columns("content")?.contains("mimetype") {
+            return Ok(Vec::new());
+        }
+        let columns = self.required_table(
+            "content",
+            &["ContentID", "Title", "ImageId", "DateLastRead"],
+            &["ContentID", "ContentType"],
         )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {columns} FROM content
+             WHERE ContentType = 6 AND MimeType LIKE 'application/vnd.myscript.nebo%'"
+        ))?;
         let notebooks = stmt
             .query_map([], |r| {
                 Ok(KoboBook {
@@ -146,15 +187,30 @@ impl KoboDb {
     }
 
     fn books(&self, volume_ids: &BTreeSet<&str>) -> Result<Vec<KoboBook>> {
-        const COLUMNS: &str = "ContentID, Title, Attribution, Publisher, ISBN, Language, Series,
-                    SeriesNumber, ImageId, ___PercentRead, DateLastRead";
+        let columns = self.required_table(
+            "content",
+            &[
+                "ContentID",
+                "Title",
+                "Attribution",
+                "Publisher",
+                "ISBN",
+                "Language",
+                "Series",
+                "SeriesNumber",
+                "ImageId",
+                "___PercentRead",
+                "DateLastRead",
+            ],
+            &["ContentID", "ContentType", "Title"],
+        )?;
         let mut stmt = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM content WHERE ContentType = 6 AND ContentID = ?1"
+            "SELECT {columns} FROM content WHERE ContentType = 6 AND ContentID = ?1"
         ))?;
         // A book moved on the device (e.g. re-sent by calibre into another
         // folder) keeps its file name; its old path lingers in WordList.
         let mut moved = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM content WHERE ContentType = 6
+            "SELECT {columns} FROM content WHERE ContentType = 6
                AND substr(ContentID, -length(?1)) = ?1 LIMIT 2"
         ))?;
         let mut books = Vec::new();
@@ -216,10 +272,15 @@ impl KoboDb {
         volume_ids: &BTreeSet<String>,
     ) -> Result<HashMap<String, ChapterIndex>> {
         let mut indexes: HashMap<String, ChapterIndex> = HashMap::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT ContentID, ContentType, Title, VolumeIndex FROM content
-             WHERE BookID = ?1 AND ContentType IN (9, 899)",
+        let columns = self.required_table(
+            "content",
+            &["ContentID", "ContentType", "Title", "VolumeIndex"],
+            &["ContentID", "ContentType", "BookID"],
         )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {columns} FROM content
+             WHERE BookID = ?1 AND ContentType IN (9, 899)"
+        ))?;
         for vid in volume_ids {
             let ix = indexes.entry(vid.clone()).or_default();
             let mut rows = stmt.query([vid])?;
@@ -239,34 +300,94 @@ impl KoboDb {
         Ok(indexes)
     }
 
-    fn has_column(&self, table: &str, column: &str) -> Result<bool> {
-        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
-        let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
-        for name in names {
-            if name? == column {
-                return Ok(true);
-            }
+    /// Lower-cased column names of `table`; empty when it doesn't exist.
+    fn table_columns(&self, table: &str) -> Result<HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))?;
+        let names = stmt
+            .query_map([], |r| r.get::<_, String>(1))?
+            .map(|n| n.map(|n| n.to_ascii_lowercase()))
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(names)
+    }
+
+    /// A SELECT column list for `table`, in the order of `wanted`. Kobo's
+    /// schema shifts between firmware versions, so a column this database
+    /// lacks reads as NULL, unless it's `required`: those carry identity or
+    /// the reader's own text, and a database without them fails with a clear
+    /// error rather than importing quietly wrong data. `None` when the table
+    /// itself is missing. Columns named only in `required` (for a WHERE or
+    /// ORDER BY) are checked but not selected.
+    fn columns(&self, table: &str, wanted: &[&str], required: &[&str]) -> Result<Option<String>> {
+        let have = self.table_columns(table)?;
+        if have.is_empty() {
+            return Ok(None);
         }
-        Ok(false)
+        if let Some(missing) = required
+            .iter()
+            .find(|c| !have.contains(&c.to_ascii_lowercase()))
+        {
+            return Err(Error::MissingColumn {
+                table: table.to_owned(),
+                column: (*missing).to_owned(),
+            });
+        }
+        let list = wanted
+            .iter()
+            .map(|c| {
+                if have.contains(&c.to_ascii_lowercase()) {
+                    format!("\"{c}\"")
+                } else {
+                    format!("NULL AS \"{c}\"")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(Some(list))
+    }
+
+    /// [`Self::columns`] for a table every Kobo database has.
+    fn required_table(&self, table: &str, wanted: &[&str], required: &[&str]) -> Result<String> {
+        self.columns(table, wanted, required)?
+            .ok_or_else(|| Error::MissingTable(table.to_owned()))
     }
 
     /// Returns visible bookmarks in reading order, plus the number of hidden ones.
     fn bookmarks(&self) -> Result<(Vec<KoboBookmark>, usize)> {
         // Kobos without a colour screen (e.g. the Clara 2E, DbVersion 174)
-        // have no Color column; their highlights are the default colour,
-        // which is what colour Kobos record for an ordinary highlight.
-        let color = if self.has_column("Bookmark", "Color")? {
-            "Color"
-        } else {
-            "0"
+        // have no Color column: it reads as NULL, which is the default
+        // colour, what colour Kobos record for an ordinary highlight.
+        let Some(columns) = self.columns(
+            "Bookmark",
+            &[
+                "BookmarkID",
+                "VolumeID",
+                "ContentID",
+                "Type",
+                "Text",
+                "Annotation",
+                "Color",
+                "StartContainerPath",
+                "StartContainerChildIndex",
+                "StartOffset",
+                "EndContainerPath",
+                "EndContainerChildIndex",
+                "EndOffset",
+                "ChapterProgress",
+                "DateCreated",
+                "DateModified",
+                "Hidden",
+                "ExtraAnnotationData",
+            ],
+            &["BookmarkID", "VolumeID", "ContentID", "Text", "Annotation"],
+        )?
+        else {
+            return Ok((Vec::new(), 0));
         };
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT BookmarkID, VolumeID, ContentID, Type, Text, Annotation, {color},
-                    StartContainerPath, StartContainerChildIndex, StartOffset,
-                    EndContainerPath, EndContainerChildIndex, EndOffset,
-                    ChapterProgress, DateCreated, DateModified, Hidden, ExtraAnnotationData
-             FROM Bookmark"
-        ))?;
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {columns} FROM Bookmark"))?;
         let mut hidden = 0;
         let mut bookmarks = Vec::new();
         let mut rows = stmt.query([])?;
@@ -279,7 +400,12 @@ impl KoboDb {
                 bookmark_id: text(r, 0)?.unwrap_or_default(),
                 volume_id: text(r, 1)?.unwrap_or_default(),
                 content_id: text(r, 2)?.unwrap_or_default(),
-                kind: AnnotationKind::from_kobo(text(r, 3)?.as_deref()),
+                kind: kind(
+                    text(r, 3)?.as_deref(),
+                    text(r, 4)?.is_some(),
+                    text(r, 5)?.is_some_and(|n| !n.trim().is_empty()),
+                    blob(r, 17)?.is_some(),
+                ),
                 text: clean_opt(text(r, 4)?.as_deref()),
                 note: clean_opt(text(r, 5)?.as_deref()),
                 color: crate::color::kobo_color(int(r, 6)?.unwrap_or(0)).to_owned(),
@@ -328,9 +454,18 @@ impl KoboDb {
     }
 
     fn words(&self) -> Result<Vec<KoboWord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT Text, VolumeId, DictSuffix, DateCreated FROM WordList ORDER BY DateCreated",
-        )?;
+        let Some(columns) = self.columns(
+            "WordList",
+            &["Text", "VolumeId", "DictSuffix", "DateCreated"],
+            &["Text"],
+        )?
+        else {
+            return Ok(Vec::new());
+        };
+        // Ordered by position, since DateCreated may be a NULL stand-in.
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT {columns} FROM WordList ORDER BY 4"))?;
         let words = stmt
             .query_map([], |r| {
                 Ok(KoboWord {
@@ -346,6 +481,18 @@ impl KoboDb {
             .filter(|w| w.as_ref().map_or(true, |w| !w.word.is_empty()))
             .collect::<rusqlite::Result<_>>()?;
         Ok(words)
+    }
+}
+
+/// The kind of a `Bookmark` row. Firmware without a `Type` column gets it
+/// from the row: a note, a highlight, ink data (a markup), or a dogear.
+fn kind(kobo_type: Option<&str>, has_text: bool, has_note: bool, has_ink: bool) -> AnnotationKind {
+    match kobo_type {
+        Some(t) => AnnotationKind::from_kobo(Some(t)),
+        None if has_note => AnnotationKind::Note,
+        None if has_text => AnnotationKind::Highlight,
+        None if has_ink => AnnotationKind::Markup,
+        None => AnnotationKind::Dogear,
     }
 }
 

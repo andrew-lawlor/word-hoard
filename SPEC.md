@@ -296,7 +296,7 @@ As of 0.8 this repository is Kollate renamed: Kollate's code base (GTK app, libr
 | `word-hoard` (GTK app, binary `word-hoard`) | `word-hoard` | stays |
 | `word-hoard-cli` (binary `word-hoard-cli`) | `word-hoard-cli` | stays |
 
-From the standalone M0 CLI (kept in git history), three things are still to port into `hoard-core/src/kobo`: reading databases with missing columns as empty instead of failing, finding a Kobo mounted anywhere via `/proc/self/mounts`, and the schema-only `report` command.
+From the standalone M0 CLI (kept in git history), three things were ported into `hoard-core/src/kobo` in 0.8: optional columns and tables a firmware lacks read as empty (identity and text columns stay required, failing with a clear error), Kobos are found wherever they're mounted via `/proc/self/mounts`, and `word-hoard-cli report` prints the schema without rows or serial number for compatibility reports.
 
 Names kept from Kollate for compatibility: Anki note types, decks and GUID seeds (`Kollate Vocab`, `kollate:vocab:…`), the Obsidian `kollate_id` and `%% kollate:user` markers and `kollate-markup-` attachments, and the `kollate-backup` format. Renaming them would duplicate cards or orphan notes already exported.
 
