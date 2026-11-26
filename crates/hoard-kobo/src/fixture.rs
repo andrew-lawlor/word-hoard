@@ -74,19 +74,28 @@ pub fn create_db(path: &Path, schema: Schema) -> Result<()> {
     book(STORE_ID, "Piranesi", "Susanna Clarke", 100, 2)?;
     book("file:///mnt/onboard/Books/Unread.epub", "Unread Book", "Nobody", 0, 0)?;
 
-    // KEPUB chapters use ContentType 899, EPUB chapters 9.
+    // As on firmware 4.46: each KEPUB chapter file has a ContentType 9 row
+    // titled with its file name (VolumeIndex = spine order) and a ContentType
+    // 899 table-of-contents row with id + "-1" and the real title (its own
+    // VolumeIndex sequence). Chapter ids drop the book id's "file://" prefix.
     let chapter = |id: String, kind: &str, title: &str, index: i64, volume: &str| {
         conn.execute(
             "INSERT INTO content (ContentID, ContentType, BookID, Title, VolumeIndex) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, kind, volume, title, index],
         )
     };
-    let ch1 = format!("{SIDELOADED_ID}!OEBPS!ch01.xhtml");
-    let ch2 = format!("{SIDELOADED_ID}!OEBPS!ch02.xhtml");
-    let piranesi_ch = format!("{STORE_ID}!part1.xhtml");
+    let chapter_base = SIDELOADED_ID.trim_start_matches("file://");
+    let file = |name: &str| format!("{chapter_base}!OEBPS!{name}");
+    let ch1 = file("ch01.xhtml");
+    let ch2 = file("ch02.xhtml");
+    chapter(file("cover.xhtml"), "9", "cover.xhtml", 0, SIDELOADED_ID)?;
+    chapter(ch1.clone(), "9", "ch01.xhtml", 1, SIDELOADED_ID)?;
     chapter(format!("{ch1}-1"), "899", "Chapter One", 0, SIDELOADED_ID)?;
-    chapter(ch2.clone(), "9", "Chapter Two", 1, SIDELOADED_ID)?;
-    chapter(piranesi_ch.clone(), "899", "Part 1", 0, STORE_ID)?;
+    chapter(ch2.clone(), "9", "ch02.xhtml", 2, SIDELOADED_ID)?;
+    chapter(format!("{ch2}-1"), "899", "Chapter Two", 1, SIDELOADED_ID)?;
+    // A plain chapter row whose title is a real title, not a file name.
+    let piranesi_ch = format!("{STORE_ID}!part1.xhtml");
+    chapter(piranesi_ch.clone(), "9", "Part 1", 0, STORE_ID)?;
 
     struct Mark<'a> {
         id: &'a str,

@@ -43,7 +43,7 @@ fn annotations_are_grouped_ordered_and_classified() {
     assert_eq!(note.kind, AnnotationKind::Note);
     assert_eq!(note.note.as_deref(), Some("Compare with Graeber."));
     assert_eq!(note.color.as_deref(), Some("blue"));
-    // Chapter one's row id carries a "-1" suffix; the prefix fallback finds it.
+    // Title from the 899 TOC row, not the file-name title of the ContentType 9 row.
     assert_eq!(note.chapter.as_deref(), Some("Chapter One"));
     assert_eq!(dispossessed.annotations[3].chapter.as_deref(), Some("Chapter Two"));
     assert_eq!(dispossessed.annotations[0].kind, AnnotationKind::Bookmark);

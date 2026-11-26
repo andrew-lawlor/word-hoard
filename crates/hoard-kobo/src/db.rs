@@ -42,7 +42,11 @@ const BOOK_COLUMNS: &[&str] = &[
     "DateLastRead",
 ];
 
-const CHAPTER_COLUMNS: &[&str] = &["ContentID", "Title", "VolumeIndex"];
+const CHAPTER_COLUMNS: &[&str] = &["ContentID", "Title", "VolumeIndex", "ContentType"];
+
+/// Table-of-contents entries for KEPUBs. Their ids are the chapter file's id
+/// plus `-1`, `-2`, …; their titles are the real chapter titles.
+const TOC_TYPE: i64 = 899;
 
 const BOOKMARK_COLUMNS: &[&str] = &[
     "BookmarkID",
@@ -62,6 +66,19 @@ const BOOKMARK_COLUMNS: &[&str] = &[
     "Color",
 ];
 
+struct ChapterRow {
+    title: Option<String>,
+    index: Option<i64>,
+    content_type: Option<i64>,
+}
+
+impl ChapterRow {
+    fn is_toc(&self) -> bool {
+        self.content_type == Some(TOC_TYPE)
+    }
+}
+
+/// A resolved chapter: title for display, index for ordering.
 struct Chapter {
     title: Option<String>,
     index: Option<i64>,
@@ -132,7 +149,8 @@ impl KoboDb {
             let text = r.str(7);
             let note = r.str(8);
             let kind = classify(r.str(13).as_deref(), text.is_some(), note.is_some());
-            let chapter = r.str(2).and_then(|cid| find_chapter(&chapters, &cid));
+            let chapter = r.str(2).map(|cid| find_chapter(&chapters, &cid));
+            let chapter = chapter.as_ref();
             let color = match kind {
                 AnnotationKind::Highlight | AnnotationKind::Note => r.int(14).map(color_name),
                 _ => None,
@@ -227,11 +245,14 @@ impl KoboDb {
         Ok(out)
     }
 
-    fn chapters(&self) -> Result<BTreeMap<String, Chapter>> {
+    fn chapters(&self) -> Result<BTreeMap<String, ChapterRow>> {
         let rows = self.select("content", CHAPTER_COLUMNS, "WHERE CAST(ContentType AS INTEGER) <> 6")?;
         Ok(rows
             .iter()
-            .filter_map(|r| Some((r.str(0)?, Chapter { title: r.str(1), index: r.int(2) })))
+            .filter_map(|r| {
+                let row = ChapterRow { title: r.str(1), index: r.int(2), content_type: r.int(3) };
+                Some((r.str(0)?, row))
+            })
             .collect())
     }
 
@@ -404,22 +425,30 @@ fn missing_book(volume: String) -> BookInfo {
     }
 }
 
-/// Matches a bookmark's `ContentID` to its chapter row. Exact match first,
-/// then without a `#fragment`, then the first chapter id that extends it
-/// (some firmware appends suffixes to split chapter ids).
-fn find_chapter<'a>(chapters: &'a BTreeMap<String, Chapter>, content_id: &str) -> Option<&'a Chapter> {
-    if let Some(c) = chapters.get(content_id) {
-        return Some(c);
-    }
+/// Resolves a bookmark's `ContentID` (a chapter file) to a chapter.
+///
+/// Kobo keeps two kinds of rows per KEPUB chapter file: the file itself
+/// (ContentType 9, titled with its file name, `VolumeIndex` in spine order)
+/// and table-of-contents entries (ContentType 899, id + `-1`, real titles).
+/// Ordering comes from the file row; the title from the first TOC entry, or
+/// from the file row when its title is not just the file name.
+fn find_chapter(chapters: &BTreeMap<String, ChapterRow>, content_id: &str) -> Chapter {
     let base = content_id.split('#').next().unwrap_or(content_id);
-    if let Some(c) = chapters.get(base) {
-        return Some(c);
-    }
-    chapters
-        .range(base.to_string()..)
-        .next()
-        .filter(|(id, _)| id.starts_with(base))
+    let file_row = chapters.get(base).filter(|c| !c.is_toc());
+    let toc_prefix = format!("{base}-");
+    let toc_row = chapters
+        .range(toc_prefix.clone()..)
+        .take_while(|(id, _)| id.starts_with(&toc_prefix))
         .map(|(_, c)| c)
+        .find(|c| c.is_toc() && c.title.is_some())
+        .or_else(|| chapters.get(base).filter(|c| c.is_toc()));
+
+    let file_name = base.rsplit(['!', '/']).next().unwrap_or(base);
+    let title = toc_row
+        .and_then(|c| c.title.clone())
+        .or_else(|| file_row.and_then(|c| c.title.clone()).filter(|t| t != file_name));
+    let index = file_row.and_then(|c| c.index).or_else(|| toc_row.and_then(|c| c.index));
+    Chapter { title, index }
 }
 
 /// Chapter order, then position within the chapter (koboSpan ids such as
