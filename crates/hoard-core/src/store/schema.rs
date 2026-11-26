@@ -299,4 +299,24 @@ pub const MIGRATIONS: &[&str] = &[
     CREATE INDEX annotation_book ON annotation(book_id);
     CREATE INDEX annotation_reading_order ON annotation(book_id, spine_index, position_key);
     "#,
+    // 11: books as files (Word Hoard SPEC, "Library model and storage"). A
+    // book's files live in the books folder; `path` is relative to it, so
+    // the folder can move. `hash` (BLAKE3) finds the same file added twice.
+    r#"
+    CREATE TABLE book_file (
+        id       INTEGER PRIMARY KEY,
+        book_id  INTEGER NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+        path     TEXT NOT NULL UNIQUE,
+        format   TEXT NOT NULL,
+        size     INTEGER NOT NULL,
+        hash     TEXT NOT NULL,
+        epub_uid TEXT,
+        added_at TEXT NOT NULL
+    );
+    CREATE INDEX book_file_book ON book_file(book_id);
+    CREATE INDEX book_file_hash ON book_file(hash);
+    ALTER TABLE book ADD COLUMN description TEXT;
+    ALTER TABLE book ADD COLUMN published TEXT;
+    ALTER TABLE book ADD COLUMN identifiers TEXT;
+    "#,
 ];

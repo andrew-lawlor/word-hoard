@@ -3,6 +3,7 @@
 
 pub mod color;
 pub mod dict;
+pub mod epub;
 pub mod error;
 pub mod export;
 pub mod import;

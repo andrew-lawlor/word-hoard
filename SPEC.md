@@ -114,7 +114,7 @@ $XDG_DATA_HOME/word-hoard/
 | Entity | Key fields | Notes |
 | --- | --- | --- |
 | Book | id (UUIDv7), title, sort_title, language, description, published, isbn, identifiers (json), rating, read_status, progress | Logical work; may have several files |
-| BookFile | book_id, path, format, sha256, size, mtime, epub_uid | Content hash drives dedupe and device matching |
+| BookFile | book_id, path (relative to the books folder), format, size, hash (BLAKE3), epub_uid, added_at | Content hash drives dedupe and device matching; built in 0.8 (`book_file`) |
 | Contributor / BookContributor | name, sort_name, role | Author, editor, translator |
 | Series | name, index (decimal) | |
 | Tag | name, parent_id | Hierarchical tags (Fiction/SF) |
@@ -305,7 +305,7 @@ Names kept from Kollate for compatibility: Anki note types, decks and GUID seeds
 Build the annotation path end to end first; it is the feature nobody else does well and it proves the Kobo layer.
 
 1. **M0 — Kobo annotation CLI.** Done, and superseded by the merge with Kollate (0.8), whose app and CLI already import Kobo and KOReader annotations, verified on a Libra Colour, Clara 2E, Clara Colour and Elipsa 2E.
-2. **M1 — Library core.** SQLite schema, EPUB metadata read/write, Calibre import, FTS search, Kollate's dedupe and merge rules, stylus markups, notebooks and KOReader. Gate: imports a 2k-book Calibre library in under 60 s with no lost metadata.
+2. **M1 — Library core.** SQLite schema, EPUB metadata read/write, Calibre import, FTS search, Kollate's dedupe and merge rules, stylus markups, notebooks and KOReader. Gate: imports a 2k-book Calibre library in under 60 s with no lost metadata. Status: books as files done (EPUB 2/3 metadata, `book_file`, `word-hoard-cli add`; 50 real EPUBs added in 0.5 s); Kollate already brought dedupe, markups, notebooks and KOReader. Next: navigation and Library view, Calibre import, FTS.
 3. **M2 — GTK shell.** Library grid/list, book detail, annotations views, device pane with read-only sync. Gate: usable daily as a Kobo highlight browser.
 4. **M3 — Sending books.** KEPUB conversion, send/remove, shelves sync, DB backup and writes. Gate: round-trips 500 books with zero firmware re-import loops.
 5. **M4 — Curation.** Notes, commonplace book, threads, collections→shelves, Markdown mirror.

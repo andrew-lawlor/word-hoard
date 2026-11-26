@@ -1,12 +1,14 @@
 //! The local library: Word Hoard's own SQLite database and the source of truth.
 //! Nothing here ever touches the device.
 
+mod books;
 mod markup;
 mod pen;
 mod query;
 mod schema;
 mod vocab;
 
+pub use books::{AddMode, AddOutcome, AddedFile, BOOKS_ROOT_SETTING, BookFile, default_books_root};
 pub use markup::{MarkupJob, page_words_path};
 pub use pen::GLOSSES_SETTING;
 pub(crate) use pen::apply_pen_marks;

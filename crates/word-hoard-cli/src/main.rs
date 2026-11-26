@@ -52,6 +52,18 @@ enum Command {
     },
     /// Show what the library contains.
     Library,
+    /// Add EPUB files (or folders of them) to the library's books folder.
+    Add {
+        /// Files or folders; folders are searched for .epub files.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Hard-link instead of copying (same filesystem only; else copies).
+        #[arg(long)]
+        link: bool,
+        /// Use this as the books folder from now on.
+        #[arg(long, value_name = "DIR")]
+        books_folder: Option<PathBuf>,
+    },
     /// Handwriting models for transcribing stylus markups (list them, or add files).
     Models {
         #[command(subcommand)]
@@ -153,6 +165,11 @@ fn main() -> Result<()> {
         Command::Report { path, output } => report(&path, output.as_deref()),
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
+        Command::Add {
+            paths,
+            link,
+            books_folder,
+        } => add(&library_path, &paths, link, books_folder.as_deref()),
         Command::Models { action } => models(&library_path, action),
         Command::Transcribe { model, cpu } => transcribe(&library_path, model.as_deref(), cpu),
         Command::Dict(cmd) => dict(cmd),
@@ -443,10 +460,12 @@ fn library(library_path: &Path) -> Result<()> {
         c.vocab
     );
     for b in lib.books()? {
+        let files = lib.book_files(b.id)?.len();
         println!(
-            "{:>4} annotations {:>3} words  {} — {}",
+            "{:>4} annotations {:>3} words {:>2} files  {} — {}",
             b.annotation_count,
             b.vocab_count,
+            files,
             b.title,
             b.author.as_deref().unwrap_or("Unknown")
         );
@@ -454,8 +473,80 @@ fn library(library_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Reads a Kobo: its database and, when mounted, its notebooks and
-/// KOReader's highlights and words.
+fn add(
+    library_path: &Path,
+    paths: &[PathBuf],
+    link: bool,
+    books_folder: Option<&Path>,
+) -> Result<()> {
+    use hoard_core::store::{AddMode, AddOutcome};
+    let lib = Library::open(library_path)?;
+    if let Some(folder) = books_folder {
+        lib.set_books_root(folder)?;
+    }
+    println!("Books folder: {}", lib.books_root()?.display());
+    let mut files = Vec::new();
+    for path in paths {
+        collect_epubs(path, &mut files)?;
+    }
+    let mode = if link { AddMode::Link } else { AddMode::Copy };
+    let (mut new, mut attached, mut known, mut failed) = (0, 0, 0, 0);
+    for file in &files {
+        match lib.add_file(file, mode) {
+            Ok(added) => {
+                let what = match added.outcome {
+                    AddOutcome::NewBook => {
+                        new += 1;
+                        "added"
+                    }
+                    AddOutcome::AttachedToBook => {
+                        attached += 1;
+                        "added to a book already in the library"
+                    }
+                    AddOutcome::AlreadyInLibrary => {
+                        known += 1;
+                        "already in the library"
+                    }
+                };
+                println!("{what}: {}", added.path.display());
+            }
+            Err(err) => {
+                failed += 1;
+                eprintln!("couldn't add {}: {err}", file.display());
+            }
+        }
+    }
+    println!(
+        "\n{new} new books, {attached} files for books already in the library, \
+         {known} already there, {failed} failed"
+    );
+    Ok(())
+}
+
+/// `path` itself if it's a file, else every .epub under it, sorted.
+fn collect_epubs(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    if !path.is_dir() {
+        out.push(path.to_path_buf());
+        return Ok(());
+    }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(path)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for entry in entries {
+        if entry.is_dir() {
+            collect_epubs(&entry, out)?;
+        } else if entry
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("epub"))
+        {
+            out.push(entry);
+        }
+    }
+    Ok(())
+}
+
+/// Prints a Kobo's schema (no rows, no serial number).
 fn report(path: &Path, output: Option<&Path>) -> Result<()> {
     let db = KoboDb::open_copy(&find_kobo_db(path)?)?;
     let text = db.schema_report(DeviceInfo::read(path).as_ref())?;
@@ -469,6 +560,8 @@ fn report(path: &Path, output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Reads a Kobo: its database and, when mounted, its notebooks and
+/// KOReader's highlights and words.
 fn read_kobo(path: &Path) -> Result<KoboSnapshot> {
     let mut snapshot = KoboDb::open_copy(&find_kobo_db(path)?)?.snapshot()?;
     warn_if_untested(&snapshot);

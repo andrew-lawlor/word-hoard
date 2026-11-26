@@ -58,7 +58,7 @@ fn chapter_entry(content_id: &str, volume_id: &str) -> Option<String> {
 /// `encryption.xml` usually is too, but many DRM-free books carry one only
 /// for obfuscated embedded fonts (the EPUB standard's font "embedding"),
 /// which leaves the text readable: 14 of 96 books on one Kobo.
-fn is_drm<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> bool {
+pub(crate) fn is_drm<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> bool {
     if zip.by_name("META-INF/rights.xml").is_ok() {
         return true;
     }
@@ -95,11 +95,11 @@ pub struct Context {
     pub chapter: usize,
 }
 
-fn io_err(msg: impl std::fmt::Display) -> crate::Error {
+pub(crate) fn io_err(msg: impl std::fmt::Display) -> crate::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, msg.to_string()).into()
 }
 
-fn attr(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
+pub(crate) fn attr(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
     e.attributes()
         .flatten()
         .find(|a| a.key.as_ref() == name)
@@ -111,7 +111,7 @@ fn attr(e: &quick_xml::events::BytesStart, name: &str) -> Option<String> {
 }
 
 /// Resolves `href` relative to the directory of `base` (a zip path).
-fn join_zip_path(base: &str, href: &str) -> String {
+pub(crate) fn join_zip_path(base: &str, href: &str) -> String {
     let mut parts: Vec<&str> = base
         .rsplit_once('/')
         .map(|(dir, _)| dir.split('/').collect())
@@ -170,7 +170,7 @@ const BLOCK_TAGS: &[&str] = &[
     "pre",
 ];
 
-fn html_entity(name: &str) -> &'static str {
+pub(crate) fn html_entity(name: &str) -> &'static str {
     match name {
         "amp" => "&",
         "lt" => "<",
