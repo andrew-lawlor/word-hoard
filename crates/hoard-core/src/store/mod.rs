@@ -1,7 +1,7 @@
 //! The local library: Word Hoard's own SQLite database and the source of truth.
 //! Nothing here ever touches the device.
 
-mod books;
+pub mod books;
 mod markup;
 mod pen;
 mod query;
@@ -30,6 +30,8 @@ pub struct Library {
     pub(crate) conn: Connection,
     /// Folder holding the database; assets are stored beside it.
     dir: Option<PathBuf>,
+    /// The database file (`None` in memory).
+    path: Option<PathBuf>,
 }
 
 /// `$XDG_DATA_HOME`, defaulting to `~/.local/share`.
@@ -318,14 +320,22 @@ impl Library {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        Self::init(
+        let mut lib = Self::init(
             Connection::open(path)?,
             path.parent().map(Path::to_path_buf),
-        )
+        )?;
+        lib.path = Some(path.to_path_buf());
+        Ok(lib)
     }
 
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?, None)
+    }
+
+    /// The database file, for opening a second connection on another
+    /// thread (`None` for in-memory libraries).
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Where copied covers and markup images go (`None` for in-memory libraries).
@@ -356,7 +366,11 @@ impl Library {
             tx.commit()?;
         }
         conn.pragma_update(None, "foreign_keys", true)?;
-        let lib = Self { conn, dir };
+        let lib = Self {
+            conn,
+            dir,
+            path: None,
+        };
         lib.backfill_position_keys()?;
         Ok(lib)
     }

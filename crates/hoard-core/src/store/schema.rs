@@ -319,4 +319,16 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE book ADD COLUMN published TEXT;
     ALTER TABLE book ADD COLUMN identifiers TEXT;
     "#,
+    // 12: what a Calibre library knows that EPUBs often don't: the author's
+    // sort name, a rating (0-10, two per star, as Calibre stores it) and
+    // tags. Book tags are kept apart from highlight tags.
+    r#"
+    ALTER TABLE book ADD COLUMN author_sort TEXT;
+    ALTER TABLE book ADD COLUMN rating INTEGER;
+    CREATE TABLE book_tag (
+        book_id INTEGER NOT NULL REFERENCES book(id) ON DELETE CASCADE,
+        name    TEXT NOT NULL,
+        PRIMARY KEY (book_id, name)
+    );
+    "#,
 ];

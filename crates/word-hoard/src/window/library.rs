@@ -212,9 +212,12 @@ pub(super) fn build(lib: &Library, open: impl Fn(i64) + Clone + 'static) -> Libr
             .build()
     };
     let stack = gtk::Stack::new();
+    // A grid view scrolls itself; ClampScrollable caps its width without
+    // getting between it and the scrolled window (a plain Clamp does, and
+    // only the first row gets drawn).
     stack.add_named(
         &scrolled(
-            &adw::Clamp::builder()
+            &adw::ClampScrollable::builder()
                 .maximum_size(1100)
                 .child(&grid)
                 .build()

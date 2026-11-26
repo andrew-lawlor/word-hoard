@@ -365,7 +365,7 @@ fn looks_like_isbn(value: &str) -> bool {
 }
 
 /// Text of an HTML fragment: tags dropped, block ends turned into line breaks.
-fn strip_tags(html: &str) -> String {
+pub(crate) fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
     while let Some(start) = rest.find('<') {

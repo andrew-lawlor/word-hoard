@@ -116,7 +116,7 @@ fn format_of(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn hash_file(path: &Path) -> Result<(String, u64)> {
+pub(crate) fn hash_file(path: &Path) -> Result<(String, u64)> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = vec![0; 64 * 1024];
@@ -158,23 +158,73 @@ fn safe_component(s: &str) -> String {
 }
 
 /// `Author/Title (Year)/Title.ext`, relative to the books folder.
-fn relative_dest(meta: &EpubMetadata, title: &str, format: &str) -> PathBuf {
-    let author = meta
-        .authors
-        .first()
-        .map_or_else(|| "Unknown author".to_owned(), |a| a.display_name());
-    let folder = match meta.year() {
+fn relative_dest(author: &str, title: &str, year: Option<&str>, format: &str) -> PathBuf {
+    let folder = match year {
         Some(year) => format!("{title} ({year})"),
         None => title.to_owned(),
     };
-    let ext = if format == "kepub" {
-        "kepub.epub"
-    } else {
-        "epub"
-    };
-    PathBuf::from(safe_component(&author))
+    PathBuf::from(safe_component(author))
         .join(safe_component(&folder))
-        .join(format!("{}.{ext}", safe_component(title)))
+        .join(format!("{}.{}", safe_component(title), extension(format)))
+}
+
+/// The file extension for a format: `kepub.epub` for KEPUB, else the format.
+fn extension(format: &str) -> String {
+    match format {
+        "kepub" => "kepub.epub".to_owned(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
+/// What the library records about a book, from whichever source knows it
+/// (the EPUB itself, or a Calibre library).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BookFacts {
+    pub title: String,
+    /// As one string, like Kobo's `Attribution`, for the fingerprint.
+    pub author: Option<String>,
+    /// The first author in reading order, for the folder name.
+    pub folder_author: Option<String>,
+    pub author_sort: Option<String>,
+    pub publisher: Option<String>,
+    pub isbn: Option<String>,
+    pub language: Option<String>,
+    pub series: Option<String>,
+    pub series_number: Option<String>,
+    pub description: Option<String>,
+    pub published: Option<String>,
+    pub identifiers: Vec<(String, String)>,
+    /// 0–10, as Calibre stores it (two per star).
+    pub rating: Option<i64>,
+    pub tags: Vec<String>,
+    /// When the book entered its previous library.
+    pub added: Option<chrono::DateTime<Utc>>,
+}
+
+impl BookFacts {
+    fn from_epub(meta: &EpubMetadata, title: String) -> Self {
+        BookFacts {
+            title,
+            author: meta.author_line(),
+            folder_author: meta.authors.first().map(|a| a.display_name()),
+            author_sort: meta.authors.first().and_then(|a| a.file_as.clone()),
+            publisher: meta.publisher.clone(),
+            isbn: meta.isbn.clone(),
+            language: meta.language.clone(),
+            series: meta.series.clone(),
+            series_number: meta.series_index.clone(),
+            description: meta.description.clone(),
+            published: meta.published.clone(),
+            identifiers: meta.identifiers.clone(),
+            ..Default::default()
+        }
+    }
+
+    fn year(&self) -> Option<&str> {
+        let date = self.published.as_deref()?;
+        date.get(..4)
+            .filter(|y| y.bytes().all(|b| b.is_ascii_digit()))
+    }
 }
 
 impl Library {
@@ -194,22 +244,25 @@ impl Library {
         self.set_setting(BOOKS_ROOT_SETTING, &root.to_string_lossy())
     }
 
+    /// The book and stored path of a file already in the library, by hash.
+    pub(crate) fn file_by_hash(&self, hash: &str) -> Result<Option<(i64, String)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT book_id, path FROM book_file WHERE hash = ?1",
+                [hash],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+    }
+
     /// Adds an EPUB to the library. A file already inside the books folder
     /// is adopted where it is; others are copied (or linked) into it.
     pub fn add_file(&self, src: &Path, mode: AddMode) -> Result<AddedFile> {
         let format = format_of(src).ok_or_else(|| Error::UnsupportedFormat(src.to_path_buf()))?;
         let root = self.books_root()?;
         let (hash, size) = hash_file(src)?;
-
-        let known: Option<(i64, String)> = self
-            .conn
-            .query_row(
-                "SELECT book_id, path FROM book_file WHERE hash = ?1",
-                [&hash],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((book_id, path)) = known {
+        if let Some((book_id, path)) = self.file_by_hash(&hash)? {
             return Ok(AddedFile {
                 book_id,
                 path: root.join(path),
@@ -228,54 +281,26 @@ impl Library {
                 })
                 .unwrap_or_else(|| "Untitled".to_owned())
         });
-        let author = meta.author_line();
+        let facts = BookFacts::from_epub(&meta, title);
+        let placed = self.place_file(src, &root, &facts, format, mode)?;
+        let dest = root.join(&placed.relative);
 
-        // Where the file goes: adopted in place inside the books folder, else
-        // a free `Author/Title (Year)/` folder.
-        let inside = src
-            .canonicalize()
-            .ok()
-            .zip(root.canonicalize().ok())
-            .and_then(|(s, r)| s.strip_prefix(&r).ok().map(Path::to_path_buf));
-        let relative = match inside {
-            Some(rel) => rel,
-            None => {
-                let mut rel = relative_dest(&meta, &title, format);
-                let mut n = 2;
-                while root.join(&rel).exists() {
-                    let base = relative_dest(&meta, &title, format);
-                    let folder = base.parent().unwrap_or(Path::new(""));
-                    let named = format!(
-                        "{} ({n})",
-                        folder.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                    rel = folder
-                        .with_file_name(named)
-                        .join(base.file_name().unwrap_or_default());
-                    n += 1;
-                }
-                let dest = root.join(&rel);
-                crate::kobo::ensure_not_on_kobo(&dest)?;
-                std::fs::create_dir_all(dest.parent().unwrap_or(&root))?;
-                let linked = mode == AddMode::Link && std::fs::hard_link(src, &dest).is_ok();
-                if !linked {
-                    std::fs::copy(src, &dest)?;
-                }
-                rel
-            }
-        };
-        let dest = root.join(&relative);
-
-        let result = self.record_file(
-            &meta,
-            &title,
-            author.as_deref(),
-            &relative,
-            format,
-            size,
-            &hash,
-        );
-        if result.is_err() && created_by_add(&dest, src) {
+        let result = (|| {
+            let tx = self.conn.unchecked_transaction()?;
+            let (book_id, outcome) = find_or_create_book(&tx, &facts, false)?;
+            insert_file(
+                &tx,
+                book_id,
+                &placed.relative,
+                format,
+                size,
+                &hash,
+                meta.unique_id.as_deref(),
+            )?;
+            tx.commit()?;
+            Ok::<_, Error>((book_id, outcome))
+        })();
+        if result.is_err() && placed.created {
             let _ = std::fs::remove_file(&dest);
         }
         let (book_id, outcome) = result?;
@@ -287,86 +312,58 @@ impl Library {
         })
     }
 
-    /// Records a file and its book in one transaction.
-    #[allow(clippy::too_many_arguments)]
-    fn record_file(
+    /// Puts a file in the books folder: adopted in place if it's already
+    /// inside it, else copied or linked to a free `Author/Title (Year)/`.
+    pub(crate) fn place_file(
         &self,
-        meta: &EpubMetadata,
-        title: &str,
-        author: Option<&str>,
-        relative: &Path,
+        src: &Path,
+        root: &Path,
+        facts: &BookFacts,
         format: &str,
-        size: u64,
-        hash: &str,
-    ) -> Result<(i64, AddOutcome)> {
-        let now = Utc::now();
-        let fingerprint = book_fingerprint(title, author);
-        let tx = self.conn.unchecked_transaction()?;
-        let existing: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM book WHERE fingerprint = ?1",
-                [&fingerprint],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let (book_id, outcome) = match existing {
-            Some(id) => (id, AddOutcome::AttachedToBook),
-            None => {
-                let id = tx.query_row(
-                    "INSERT INTO book (fingerprint, title, author, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?4) RETURNING id",
-                    params![fingerprint, title, author, now],
-                    |r| r.get(0),
-                )?;
-                (id, AddOutcome::NewBook)
-            }
-        };
-        // Fill in what the library doesn't know yet; never overwrite what a
-        // device or the user recorded.
-        let identifiers = (!meta.identifiers.is_empty())
-            .then(|| serde_json::to_string(&meta.identifiers))
-            .transpose()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        tx.execute(
-            "UPDATE book SET publisher = coalesce(publisher, ?2), isbn = coalesce(isbn, ?3),
-                    language = coalesce(language, ?4), series = coalesce(series, ?5),
-                    series_number = coalesce(series_number, ?6),
-                    description = coalesce(description, ?7), published = coalesce(published, ?8),
-                    identifiers = coalesce(identifiers, ?9), updated_at = ?10
-             WHERE id = ?1",
-            params![
-                book_id,
-                meta.publisher,
-                meta.isbn,
-                meta.language,
-                meta.series,
-                meta.series_index,
-                meta.description,
-                meta.published,
-                identifiers,
-                now
-            ],
-        )?;
-        tx.execute(
-            "INSERT INTO book_file (book_id, path, format, size, hash, epub_uid, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                book_id,
-                relative.to_string_lossy(),
-                format,
-                size as i64,
-                hash,
-                meta.unique_id,
-                now
-            ],
-        )?;
-        tx.commit()?;
-        Ok((book_id, outcome))
+        mode: AddMode,
+    ) -> Result<PlacedFile> {
+        let inside = src
+            .canonicalize()
+            .ok()
+            .zip(root.canonicalize().ok())
+            .and_then(|(s, r)| s.strip_prefix(&r).ok().map(Path::to_path_buf));
+        if let Some(relative) = inside {
+            return Ok(PlacedFile {
+                relative,
+                created: false,
+            });
+        }
+        let author = facts.folder_author.as_deref().unwrap_or("Unknown author");
+        let base = relative_dest(author, &facts.title, facts.year(), format);
+        let mut relative = base.clone();
+        let mut n = 2;
+        while root.join(&relative).exists() {
+            let folder = base.parent().unwrap_or(Path::new(""));
+            let named = format!(
+                "{} ({n})",
+                folder.file_name().unwrap_or_default().to_string_lossy()
+            );
+            relative = folder
+                .with_file_name(named)
+                .join(base.file_name().unwrap_or_default());
+            n += 1;
+        }
+        let dest = root.join(&relative);
+        crate::kobo::ensure_not_on_kobo(&dest)?;
+        std::fs::create_dir_all(dest.parent().unwrap_or(root))?;
+        let linked = mode == AddMode::Link && std::fs::hard_link(src, &dest).is_ok();
+        if !linked {
+            std::fs::copy(src, &dest)?;
+        }
+        Ok(PlacedFile {
+            relative,
+            created: true,
+        })
     }
 
     /// Gives a book without a cover the one inside its EPUB. Best effort: a
     /// book without a readable cover just has none.
-    fn store_cover(&self, book_id: i64, epub: &Path) {
+    pub(crate) fn store_cover(&self, book_id: i64, epub: &Path) {
         let Some(dir) = self.assets_dir() else { return };
         let has_cover: bool = self
             .conn
@@ -432,9 +429,126 @@ impl Library {
     }
 }
 
-/// Whether `dest` was created by this add (not the source adopted in place).
-fn created_by_add(dest: &Path, src: &Path) -> bool {
-    dest.canonicalize().ok() != src.canonicalize().ok()
+/// Where [`Library::place_file`] put a file.
+pub(crate) struct PlacedFile {
+    /// Relative to the books folder.
+    pub relative: PathBuf,
+    /// A new copy or link (to remove again if recording it fails).
+    pub created: bool,
+}
+
+/// The book these facts describe: one with the same fingerprint (known from
+/// a Kobo, say), or a new one. A found book gets the facts it's missing, or
+/// all of them when `overwrite` (a curated source such as Calibre).
+pub(crate) fn find_or_create_book(
+    tx: &rusqlite::Transaction,
+    facts: &BookFacts,
+    overwrite: bool,
+) -> Result<(i64, AddOutcome)> {
+    let now = Utc::now();
+    let fingerprint = book_fingerprint(&facts.title, facts.author.as_deref());
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM book WHERE fingerprint = ?1",
+            [&fingerprint],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let (book_id, outcome) = match existing {
+        Some(id) => (id, AddOutcome::AttachedToBook),
+        None => {
+            let id = tx.query_row(
+                "INSERT INTO book (fingerprint, title, author, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
+                params![
+                    fingerprint,
+                    facts.title,
+                    facts.author,
+                    facts.added.unwrap_or(now),
+                    now
+                ],
+                |r| r.get(0),
+            )?;
+            (id, AddOutcome::NewBook)
+        }
+    };
+    let identifiers = (!facts.identifiers.is_empty())
+        .then(|| serde_json::to_string(&facts.identifiers))
+        .transpose()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    // Fill in what the library doesn't know yet; never overwrite what a
+    // device or the user recorded, unless the source is curated.
+    let merge = if overwrite {
+        "coalesce(?, {c})"
+    } else {
+        "coalesce({c}, ?)"
+    };
+    let set = |c: &str| format!("{c} = {}", merge.replace("{c}", c));
+    let columns = [
+        "publisher",
+        "isbn",
+        "language",
+        "series",
+        "series_number",
+        "description",
+        "published",
+        "identifiers",
+        "author_sort",
+        "rating",
+    ];
+    let assignments: Vec<String> = columns.iter().map(|c| set(c)).collect();
+    tx.execute(
+        &format!(
+            "UPDATE book SET {}, updated_at = ? WHERE id = ?",
+            assignments.join(", ")
+        ),
+        params![
+            facts.publisher,
+            facts.isbn,
+            facts.language,
+            facts.series,
+            facts.series_number,
+            facts.description,
+            facts.published,
+            identifiers,
+            facts.author_sort,
+            facts.rating,
+            now,
+            book_id
+        ],
+    )?;
+    for tag in &facts.tags {
+        tx.execute(
+            "INSERT OR IGNORE INTO book_tag (book_id, name) VALUES (?1, ?2)",
+            params![book_id, tag],
+        )?;
+    }
+    Ok((book_id, outcome))
+}
+
+pub(crate) fn insert_file(
+    tx: &rusqlite::Transaction,
+    book_id: i64,
+    relative: &Path,
+    format: &str,
+    size: u64,
+    hash: &str,
+    epub_uid: Option<&str>,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO book_file (book_id, path, format, size, hash, epub_uid, added_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            book_id,
+            relative.to_string_lossy(),
+            format,
+            size as i64,
+            hash,
+            epub_uid,
+            Utc::now()
+        ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

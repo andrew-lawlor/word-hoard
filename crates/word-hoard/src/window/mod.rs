@@ -236,6 +236,7 @@ impl Window {
         let import = gio::Menu::new();
         import.append(Some("_Import from Kobo"), Some("win.import"));
         import.append(Some("Import from _Folder…"), Some("win.import-folder"));
+        import.append(Some("Import _Calibre Library…"), Some("win.import-calibre"));
         menu.append_section(None, &import);
         let export = gio::Menu::new();
         export.append(Some("_Export…"), Some("win.export"));
@@ -853,5 +854,6 @@ impl Window {
         });
         self.add_win_action("shortcuts", |this| shortcuts::present(&this.win));
         self.add_win_action("add-books", |this| this.add_books());
+        self.add_win_action("import-calibre", |this| this.import_calibre());
     }
 }

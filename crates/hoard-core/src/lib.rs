@@ -1,6 +1,7 @@
 //! Core library for Word Hoard: reading Kobo data, normalizing it, and storing
 //! and merging it into the local library. Contains no GTK code.
 
+pub mod calibre;
 pub mod color;
 pub mod dict;
 pub mod epub;

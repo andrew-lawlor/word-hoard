@@ -52,6 +52,18 @@ enum Command {
     },
     /// Show what the library contains.
     Library,
+    /// Import a Calibre library: books, metadata, tags, ratings and files.
+    /// Calibre's own library is only read.
+    ImportCalibre {
+        /// The Calibre library folder (the one holding metadata.db).
+        path: PathBuf,
+        /// Hard-link files instead of copying them (same filesystem only).
+        #[arg(long)]
+        link: bool,
+        /// Use this as the books folder from now on.
+        #[arg(long, value_name = "DIR")]
+        books_folder: Option<PathBuf>,
+    },
     /// Add EPUB files (or folders of them) to the library's books folder.
     Add {
         /// Files or folders; folders are searched for .epub files.
@@ -165,6 +177,11 @@ fn main() -> Result<()> {
         Command::Report { path, output } => report(&path, output.as_deref()),
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
+        Command::ImportCalibre {
+            path,
+            link,
+            books_folder,
+        } => import_calibre(&library_path, &path, link, books_folder.as_deref()),
         Command::Add {
             paths,
             link,
@@ -519,6 +536,39 @@ fn add(
     println!(
         "\n{new} new books, {attached} files for books already in the library, \
          {known} already there, {failed} failed"
+    );
+    Ok(())
+}
+
+fn import_calibre(
+    library_path: &Path,
+    calibre: &Path,
+    link: bool,
+    books_folder: Option<&Path>,
+) -> Result<()> {
+    use hoard_core::store::AddMode;
+    let lib = Library::open(library_path)?;
+    if let Some(folder) = books_folder {
+        lib.set_books_root(folder)?;
+    }
+    println!("Books folder: {}", lib.books_root()?.display());
+    let mode = if link { AddMode::Link } else { AddMode::Copy };
+    let started = std::time::Instant::now();
+    let stats = lib.import_calibre(calibre, mode, |done, total| {
+        if done % 100 == 0 || done == total {
+            eprintln!("{done} of {total} books");
+        }
+    })?;
+    println!(
+        "{} new books, {} matched books already in the library, {} files added, \
+         {} files already there, {} files missing from Calibre's folder, {} books without files ({:.1} s)",
+        stats.books_new,
+        stats.books_matched,
+        stats.files_added,
+        stats.files_already,
+        stats.files_missing,
+        stats.books_without_files,
+        started.elapsed().as_secs_f64()
     );
     Ok(())
 }
