@@ -222,7 +222,13 @@ impl CalibreBook {
         BookFacts {
             title: self.title.clone(),
             author: (!self.authors.is_empty()).then(|| self.authors.join(", ")),
-            folder_author: self.authors.first().cloned(),
+            folder_author: self.authors.first().map(|name| {
+                crate::epub::Author {
+                    name: name.clone(),
+                    file_as: None,
+                }
+                .display_name()
+            }),
             author_sort: self.author_sort.clone(),
             publisher: self.publisher.clone(),
             isbn,

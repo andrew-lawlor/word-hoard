@@ -65,7 +65,7 @@ fn fingerprint(parts: &[&str]) -> String {
     h.finalize().to_hex()[..32].to_owned()
 }
 
-fn alnum_words(s: &str) -> String {
+pub(crate) fn alnum_words(s: &str) -> String {
     comparable_text(s)
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())

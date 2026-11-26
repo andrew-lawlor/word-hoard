@@ -454,6 +454,10 @@ pub(crate) fn find_or_create_book(
             |r| r.get(0),
         )
         .optional()?;
+    let existing = match existing {
+        Some(id) => Some(id),
+        None => same_title_and_first_author(tx, facts)?,
+    };
     let (book_id, outcome) = match existing {
         Some(id) => (id, AddOutcome::AttachedToBook),
         None => {
@@ -524,6 +528,49 @@ pub(crate) fn find_or_create_book(
         )?;
     }
     Ok((book_id, outcome))
+}
+
+/// The first author of an author line ("Robert E. Howard, Gary Gianni"
+/// gives "Robert E. Howard"), compared by its letters and digits.
+fn first_author_key(author: &str) -> String {
+    let first = author.split([',', '&']).next().unwrap_or(author);
+    crate::normalize::alnum_words(first)
+}
+
+/// A book known only from a device (no file yet) with the same title and
+/// first author, when exactly one fits. Catches the same book recorded with
+/// more or fewer authors: a Kobo copy sent when Calibre listed one author,
+/// and Calibre listing an illustrator since. Books that already have files
+/// are left out, so another edition or translation ("The Iliad", Homer, in
+/// two translations) stays a book of its own.
+fn same_title_and_first_author(
+    tx: &rusqlite::Transaction,
+    facts: &BookFacts,
+) -> Result<Option<i64>> {
+    let Some(author) = facts.author.as_deref() else {
+        return Ok(None);
+    };
+    let key = first_author_key(author);
+    if key.is_empty() {
+        return Ok(None);
+    }
+    let mut stmt = tx.prepare(
+        "SELECT id, author FROM book
+         WHERE title = ?1 COLLATE NOCASE AND author IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM book_file f WHERE f.book_id = book.id)",
+    )?;
+    let matches: Vec<i64> = stmt
+        .query_map([&facts.title], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .filter(|(_, a)| first_author_key(a) == key)
+        .map(|(id, _)| id)
+        .collect();
+    Ok(match matches.as_slice() {
+        [id] => Some(*id),
+        _ => None,
+    })
 }
 
 pub(crate) fn insert_file(
@@ -676,6 +723,65 @@ mod tests {
                 .join("Books/Frank Herbert/Dune (1974) (2)/Dune.epub")
         );
         assert_eq!(lib.book_files(added.book_id).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn matches_the_same_book_with_more_authors() {
+        let (dir, lib) = library();
+        let insert = |title: &str, author: &str| -> i64 {
+            lib.conn
+                .query_row(
+                    "INSERT INTO book (fingerprint, title, author, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?4) RETURNING id",
+                    params![
+                        book_fingerprint(title, Some(author)),
+                        title,
+                        author,
+                        Utc::now()
+                    ],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let kane = insert("The Savage Tales of Solomon Kane", "Robert E. Howard");
+        insert("Poems", "Somebody Else");
+        let src = dir.path().join("kane.epub");
+        write_epub(
+            &src,
+            &opf(
+                "The Savage Tales of Solomon Kane",
+                "Robert E. Howard</dc:creator><dc:creator>Gary Gianni",
+                "",
+            ),
+        );
+        let added = lib.add_file(&src, AddMode::Copy).unwrap();
+        assert_eq!(
+            (added.book_id, added.outcome),
+            (kane, AddOutcome::AttachedToBook)
+        );
+
+        // Another translation of a book that already has its file: its own book.
+        let other = dir.path().join("kane2.epub");
+        write_epub(
+            &other,
+            &opf(
+                "The Savage Tales of Solomon Kane",
+                "Robert E. Howard</dc:creator><dc:creator>Someone New",
+                "<dc:subject>x</dc:subject>",
+            ),
+        );
+        assert_eq!(
+            lib.add_file(&other, AddMode::Copy).unwrap().outcome,
+            AddOutcome::NewBook
+        );
+
+        // Same title, different first author: a different book.
+        let poems = dir.path().join("poems.epub");
+        write_epub(&poems, &opf("Poems", "Another Poet", ""));
+        assert_eq!(
+            lib.add_file(&poems, AddMode::Copy).unwrap().outcome,
+            AddOutcome::NewBook
+        );
     }
 
     #[test]
