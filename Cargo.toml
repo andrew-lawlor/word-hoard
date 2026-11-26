@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+
+[workspace.dependencies]
+hoard-core = { path = "crates/hoard-core" }
+hoard-kobo = { path = "crates/hoard-kobo" }

@@ -1,0 +1,12 @@
+[package]
+name = "hoard-kobo"
+description = "Read-only access to Kobo e-readers: detection, database snapshots, annotations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hoard-core.workspace = true
+rusqlite = { version = "0.43", features = ["bundled"] }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
