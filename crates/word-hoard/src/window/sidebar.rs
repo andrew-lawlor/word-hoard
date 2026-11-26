@@ -56,7 +56,16 @@ impl Window {
             }
         };
 
-        for (nav, icon, label) in TOP_LEVEL {
+        for (nav, icon, label) in LIBRARY_NAV {
+            let count = gtk::Label::new(None);
+            add(
+                Self::sidebar_row(Some(icon), label, None, &count),
+                Some(nav),
+                Some(count),
+            );
+        }
+        add(Self::sidebar_heading("Highlights"), None, None);
+        for (nav, icon, label) in HIGHLIGHTS_NAV {
             let count = gtk::Label::new(None);
             add(
                 Self::sidebar_row(Some(icon), label, None, &count),
@@ -115,15 +124,15 @@ impl Window {
         }
         drop(lib);
 
-        // A book opened from the Books page has no row of its own: keep it
-        // and select Books. A removed tag falls back to the Inbox.
+        // A book opened from the Library has no row of its own: keep it and
+        // select Library. A removed tag falls back to the Library.
         let current = self.current.get();
         let highlight = match current {
             _ if navs.contains(&Some(current)) => Some(current),
-            Nav::Annotations(View::Book(id)) if book_map.contains_key(&id) => Some(Nav::Books),
+            Nav::Annotations(View::Book(id)) if book_map.contains_key(&id) => Some(Nav::Library),
             _ => {
-                self.current.set(Nav::Annotations(View::Inbox));
-                Some(Nav::Annotations(View::Inbox))
+                self.current.set(Nav::Library);
+                Some(Nav::Library)
             }
         };
         let selected = navs.iter().position(|n| *n == highlight);
@@ -162,9 +171,10 @@ impl Window {
             (Nav::Annotations(View::Trash), c.trash),
             (Nav::Annotations(View::RemovedOnDevice), c.removed_on_device),
             (Nav::Vocab, c.vocab),
-            (Nav::Books, shelf.len() as i64),
         ]);
-        for b in lib.books().unwrap_or_default() {
+        let all_books = lib.books().unwrap_or_default();
+        counts.insert(Nav::Library, all_books.len() as i64);
+        for b in all_books {
             counts.insert(Nav::Annotations(View::Book(b.id)), b.annotation_count);
         }
         for t in lib.tags().unwrap_or_default() {

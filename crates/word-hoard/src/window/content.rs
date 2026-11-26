@@ -13,8 +13,7 @@ impl Window {
                 None,
             ),
             _ => {
-                let label = TOP_LEVEL
-                    .iter()
+                let label = top_level()
                     .find(|(n, _, _)| *n == nav)
                     .map_or("", |(_, _, l)| l);
                 (label.to_owned(), None)
@@ -27,7 +26,7 @@ impl Window {
         let (title, author) = self.nav_title(nav);
         let (annotations, words) = self.shown.get();
         let mut parts: Vec<String> = author.into_iter().collect();
-        if nav == Nav::Books && self.books_shown.get() > 0 {
+        if nav == Nav::Library && self.books_shown.get() > 0 {
             parts.push(plural(self.books_shown.get(), "book", "books"));
         }
         if annotations > 0 && nav == Nav::Annotations(View::Notebooks) {
@@ -62,16 +61,17 @@ impl Window {
 
         self.back
             .set_visible(self.from_books.get() && matches!(nav, Nav::Annotations(View::Book(_))));
-        self.book_sort.set_visible(nav == Nav::Books);
+        self.book_sort.set_visible(nav == Nav::Library);
+        self.add_books_button.set_visible(nav == Nav::Library);
         self.search.set_placeholder_text(Some(match nav {
-            Nav::Books => "Search books by title or author",
+            Nav::Library => "Search books by title or author",
             Nav::Vocab => "Search words, definitions and sentences",
             _ => "Search highlights, notes, chapters, books and tags",
         }));
         let result = match nav {
             Nav::Annotations(view) => self.fill_annotations(view),
             Nav::Vocab => self.fill_vocab(None, "").map(|_| ()),
-            Nav::Books => self.fill_books(),
+            Nav::Library => self.fill_books(),
         };
         if let Err(err) = result {
             self.error("Couldn’t Load Library", err);
@@ -151,7 +151,7 @@ impl Window {
         let books = self
             .lib
             .borrow()
-            .shelf(sort, self.search_text().as_deref())?;
+            .library_books(sort, self.search_text().as_deref())?;
         for b in &books {
             let tile = card::book_tile(b);
             if let Some(button) = tile.child().and_downcast::<gtk::Button>() {
@@ -170,7 +170,7 @@ impl Window {
     }
 
     pub(super) fn update_empty_state(&self) {
-        let on_books = self.current.get() == Nav::Books;
+        let on_books = self.current.get() == Nav::Library;
         let empty = if on_books {
             self.books_shown.get() == 0
         } else {
@@ -201,7 +201,7 @@ impl Window {
             (
                 "media-removable-symbolic",
                 "Welcome to Word Hoard",
-                "Connect your Kobo with a USB cable, then choose Import (Ctrl+I). Nothing on the Kobo is ever changed.",
+                "Add your EPUB books with Add Books (Ctrl+O), or connect your Kobo with a USB cable and choose Import (Ctrl+I) to bring in your highlights. Nothing on the Kobo is ever changed.",
             )
         } else {
             match self.current.get() {
@@ -216,10 +216,10 @@ impl Window {
                     "Press S on a highlight to star it.",
                 ),
                 Nav::Annotations(View::Trash) => ("user-trash-symbolic", "Trash Is Empty", ""),
-                Nav::Books => (
+                Nav::Library => (
                     "folder-documents-symbolic",
                     "No Books",
-                    "Books with highlights or looked-up words appear here. Books whose highlights are all archived or trashed are hidden.",
+                    "Add EPUB books with Add Books (Ctrl+O). Books you've highlighted on your Kobo appear here too.",
                 ),
                 Nav::Annotations(View::RemovedOnDevice) => (
                     "edit-delete-symbolic",

@@ -35,6 +35,7 @@ fn main() -> glib::ExitCode {
     app.connect_activate(activate);
     app.set_accels_for_action("win.search", &["<Control>f"]);
     app.set_accels_for_action("win.import", &["<Control>i"]);
+    app.set_accels_for_action("win.add-books", &["<Control>o"]);
     app.set_accels_for_action("win.preferences", &["<Control>comma"]);
     app.set_accels_for_action("win.export", &["<Control>e"]);
     app.set_accels_for_action("win.back", &["<Alt>Left"]);

@@ -16,6 +16,9 @@ finish-args:
   # Kobo e-readers mount here. Read-only: Word Hoard never writes to the device.
   - --filesystem=/media:ro
   - --filesystem=/run/media:ro
+  # The books folder (default ~/Documents/Books). Books are added through the
+  # file chooser portal; this is only where Word Hoard keeps its copies.
+  - --filesystem=xdg-documents/Books:create
   # Notice when the Kobo is plugged in, and eject it (gvfs / UDisks2).
   - --talk-name=org.gtk.vfs.*
   - --filesystem=xdg-run/gvfsd

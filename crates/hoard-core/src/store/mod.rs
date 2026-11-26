@@ -412,6 +412,12 @@ impl Library {
             .next())
     }
 
+    /// Every book in the library (with or without highlights or files),
+    /// for the Library page. `search` matches title or author.
+    pub fn library_books(&self, sort: BookSort, search: Option<&str>) -> Result<Vec<Book>> {
+        self.query_books(None, false, search, sort)
+    }
+
     /// Books worth showing: those with a highlight in the Inbox or kept, or
     /// a word that isn't Ignored. Books whose highlights are all archived or
     /// trashed are left out. `search` matches title or author.

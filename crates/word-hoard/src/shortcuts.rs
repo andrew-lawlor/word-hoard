@@ -31,7 +31,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         "Moving Around",
         &[
             ("↑ / ↓", "Previous or next highlight"),
-            ("Alt+←", "Back to Books"),
+            ("Alt+←", "Back to Library"),
             ("Ctrl+F", "Search"),
             ("Escape", "Clear the search"),
         ],
@@ -39,6 +39,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "General",
         &[
+            ("Ctrl+O", "Add books"),
             ("Ctrl+I", "Import from your Kobo"),
             ("Ctrl+E", "Export"),
             ("Ctrl+,", "Preferences"),

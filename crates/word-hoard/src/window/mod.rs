@@ -23,6 +23,7 @@ use hoard_core::{ImportStats, Library};
 use crate::{card, edit, portal, shortcuts, word};
 
 mod annotations;
+mod books;
 mod content;
 mod device;
 mod exports;
@@ -36,11 +37,18 @@ mod transcribe;
 pub enum Nav {
     Annotations(View),
     Vocab,
-    /// The Books page (cover grid).
-    Books,
+    /// The Library page: every book (cover grid).
+    Library,
 }
 
-const TOP_LEVEL: [(Nav, &str, &str); 11] = [
+/// The sidebar's first items, above the Highlights section.
+const LIBRARY_NAV: [(Nav, &str, &str); 2] = [
+    (Nav::Library, "folder-documents-symbolic", "Library"),
+    (Nav::Vocab, "accessories-dictionary-symbolic", "Vocabulary"),
+];
+
+/// The Highlights section: Kollate's views of highlights across all books.
+const HIGHLIGHTS_NAV: [(Nav, &str, &str); 9] = [
     (
         Nav::Annotations(View::Inbox),
         "mail-unread-symbolic",
@@ -71,8 +79,6 @@ const TOP_LEVEL: [(Nav, &str, &str); 11] = [
         "starred-symbolic",
         "Starred",
     ),
-    (Nav::Books, "folder-documents-symbolic", "Books"),
-    (Nav::Vocab, "accessories-dictionary-symbolic", "Vocabulary"),
     (
         Nav::Annotations(View::Archive),
         "folder-symbolic",
@@ -89,6 +95,11 @@ const TOP_LEVEL: [(Nav, &str, &str); 11] = [
         "Deleted on Kobo",
     ),
 ];
+
+/// Every top-level sidebar item, in order.
+fn top_level() -> impl Iterator<Item = (Nav, &'static str, &'static str)> {
+    LIBRARY_NAV.into_iter().chain(HIGHLIGHTS_NAV)
+}
 
 /// What to do when a Kobo is plugged in (setting `on_connect`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,6 +205,7 @@ pub struct Window {
     books_grid: gtk::FlowBox,
     books_shown: Cell<usize>,
     book_sort: gtk::DropDown,
+    add_books_button: gtk::Button,
     back: gtk::Button,
     /// The current book was opened from the Books page (Back returns there).
     from_books: Cell<bool>,
@@ -278,12 +290,20 @@ impl Window {
         header.pack_end(&keep_all);
         let back = gtk::Button::builder()
             .icon_name("go-previous-symbolic")
-            .tooltip_text("Back to Books (Alt+←)")
+            .tooltip_text("Back to Library (Alt+←)")
             .action_name("win.back")
             .visible(false)
             .build();
-        back.update_property(&[gtk::accessible::Property::Label("Back to Books")]);
+        back.update_property(&[gtk::accessible::Property::Label("Back to Library")]);
         header.pack_start(&back);
+        let add_books = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Add Books (Ctrl+O)")
+            .action_name("win.add-books")
+            .visible(false)
+            .build();
+        add_books.update_property(&[gtk::accessible::Property::Label("Add Books")]);
+        header.pack_start(&add_books);
         let book_sort = gtk::DropDown::from_strings(&["Recent", "Title", "Author"]);
         book_sort.set_tooltip_text(Some("Sort books"));
         book_sort.update_property(&[gtk::accessible::Property::Label("Sort books")]);
@@ -462,10 +482,11 @@ impl Window {
             books_grid,
             books_shown: Cell::new(0),
             book_sort,
+            add_books_button: add_books,
             back,
             from_books: Cell::new(false),
             recent_ids: RefCell::default(),
-            current: Cell::new(Nav::Annotations(View::Inbox)),
+            current: Cell::new(Nav::Library),
             dictionaries: RefCell::default(),
         });
         this.setup_list();
@@ -689,8 +710,8 @@ impl Window {
                 .get(row.index() as usize)
                 .copied()
                 .flatten();
-            if nav == Some(Nav::Books) && this.current.get() != Nav::Books {
-                this.navigate(Nav::Books, false);
+            if nav == Some(Nav::Library) && this.current.get() != Nav::Library {
+                this.navigate(Nav::Library, false);
             }
         });
 
@@ -711,7 +732,7 @@ impl Window {
             if let Err(err) = this.lib.borrow().set_setting("books_sort", sort.as_str()) {
                 this.error("Couldn’t Save Setting", err);
             }
-            if this.current.get() == Nav::Books {
+            if this.current.get() == Nav::Library {
                 this.reload();
             }
         });
@@ -799,7 +820,7 @@ impl Window {
         self.add_win_action("export", |this| this.show_export());
         self.add_win_action("back", |this| {
             if this.from_books.get() {
-                this.navigate(Nav::Books, false);
+                this.navigate(Nav::Library, false);
             }
         });
         self.add_win_action("import-folder", |this| this.choose_import_folder());
@@ -832,5 +853,6 @@ impl Window {
             about.present(Some(&this.win));
         });
         self.add_win_action("shortcuts", |this| shortcuts::present(&this.win));
+        self.add_win_action("add-books", |this| this.add_books());
     }
 }
