@@ -27,6 +27,7 @@ mod books;
 mod content;
 mod device;
 mod exports;
+mod library;
 mod preferences;
 mod share;
 mod sidebar;
@@ -202,7 +203,7 @@ pub struct Window {
     /// Number of (annotation, vocab) rows currently listed.
     shown: Cell<(usize, usize)>,
     /// Books page.
-    books_grid: gtk::FlowBox,
+    library: library::LibraryViews,
     books_shown: Cell<usize>,
     book_sort: gtk::DropDown,
     add_books_button: gtk::Button,
@@ -309,6 +310,17 @@ impl Window {
         book_sort.update_property(&[gtk::accessible::Property::Label("Sort books")]);
         book_sort.set_visible(false);
         header.pack_end(&book_sort);
+        // Filled in once the window exists: the Library opens books through it.
+        let opener: Rc<RefCell<std::rc::Weak<Window>>> = Rc::default();
+        let library = {
+            let opener = opener.clone();
+            library::build(&lib, move |id| {
+                if let Some(this) = opener.borrow().upgrade() {
+                    this.navigate(Nav::Annotations(View::Book(id)), true);
+                }
+            })
+        };
+        header.pack_end(&library.toggles);
         let search = gtk::SearchEntry::builder()
             .placeholder_text("Search text, notes, books and tags")
             .hexpand(true)
@@ -385,33 +397,9 @@ impl Window {
             .child(&clamp)
             .build();
         let empty = adw::StatusPage::new();
-        let books_grid = gtk::FlowBox::builder()
-            .homogeneous(true)
-            .selection_mode(gtk::SelectionMode::None)
-            .activate_on_single_click(true)
-            .min_children_per_line(2)
-            .max_children_per_line(10)
-            .column_spacing(12)
-            .row_spacing(12)
-            .valign(gtk::Align::Start)
-            .margin_top(12)
-            .margin_bottom(24)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        let books_scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(
-                &adw::Clamp::builder()
-                    .maximum_size(1100)
-                    .child(&books_grid)
-                    .build(),
-            )
-            .build();
         let stack = gtk::Stack::new();
         stack.add_named(&scrolled, Some("list"));
-        stack.add_named(&books_scrolled, Some("books"));
+        stack.add_named(&library.stack, Some("books"));
         stack.add_named(&empty, Some("empty"));
         let banner = adw::Banner::new("");
         // One-time hint about keyboard triage, shown in the Inbox.
@@ -479,7 +467,7 @@ impl Window {
             list,
             groups: Rc::default(),
             shown: Cell::new((0, 0)),
-            books_grid,
+            library,
             books_shown: Cell::new(0),
             book_sort,
             add_books_button: add_books,
@@ -489,7 +477,9 @@ impl Window {
             current: Cell::new(Nav::Library),
             dictionaries: RefCell::default(),
         });
+        *opener.borrow_mut() = Rc::downgrade(&this);
         this.setup_list();
+        this.connect_library_toggles();
         this.setup_signals();
         this.setup_actions();
         this.load_dictionaries();

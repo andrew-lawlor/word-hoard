@@ -63,6 +63,7 @@ impl Window {
             .set_visible(self.from_books.get() && matches!(nav, Nav::Annotations(View::Book(_))));
         self.book_sort.set_visible(nav == Nav::Library);
         self.add_books_button.set_visible(nav == Nav::Library);
+        self.library.toggles.set_visible(nav == Nav::Library);
         self.search.set_placeholder_text(Some(match nav {
             Nav::Library => "Search books by title or author",
             Nav::Vocab => "Search words, definitions and sentences",
@@ -149,28 +150,12 @@ impl Window {
     }
 
     fn fill_books(self: &Rc<Self>) -> hoard_core::Result<()> {
-        while let Some(child) = self.books_grid.first_child() {
-            self.books_grid.remove(&child);
-        }
         let sort = BookSort::ALL[(self.book_sort.selected() as usize).min(BookSort::ALL.len() - 1)];
         let books = self
             .lib
             .borrow()
             .library_books(sort, self.search_text().as_deref())?;
-        for b in &books {
-            let tile = card::book_tile(b);
-            if let Some(button) = tile.child().and_downcast::<gtk::Button>() {
-                let weak = Rc::downgrade(self);
-                let id = b.id;
-                button.connect_clicked(move |_| {
-                    if let Some(this) = weak.upgrade() {
-                        this.navigate(Nav::Annotations(View::Book(id)), true);
-                    }
-                });
-            }
-            self.books_grid.append(&tile);
-        }
-        self.books_shown.set(books.len());
+        self.show_library_books(books);
         Ok(())
     }
 

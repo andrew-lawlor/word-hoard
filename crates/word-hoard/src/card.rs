@@ -491,9 +491,9 @@ pub fn no_highlights_row() -> gtk::ListBoxRow {
         .build()
 }
 
-/// A cover tile on the Books page: a flow box child (named with the book
-/// ID) holding a flat button.
-pub fn book_tile(book: &Book) -> gtk::FlowBoxChild {
+/// A cover tile in the Library grid: cover, title, author and counts. The
+/// grid view makes it clickable and focusable.
+pub fn book_tile(book: &Book) -> gtk::Widget {
     const W: i32 = 132;
     let tile = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -540,7 +540,9 @@ pub fn book_tile(book: &Book) -> gtk::FlowBoxChild {
         gtk::Label::builder()
             .label(text)
             .xalign(0.0)
-            .wrap(true)
+            // Only multi-line labels wrap: a one-line label that both wraps
+            // and ellipsizes measures inconsistently (GTK warns about it).
+            .wrap(lines > 1)
             .lines(lines)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .max_width_chars(1)
@@ -580,23 +582,20 @@ pub fn book_tile(book: &Book) -> gtk::FlowBoxChild {
         tile.append(&label(&counts.join(" · "), &["caption", "dim-label"], 1));
     }
 
-    // A flat button, so the tile is clickable and accessible like any button.
-    let button = gtk::Button::builder()
-        .child(&tile)
-        .css_classes(["flat", "book-tile"])
-        .build();
     let name = match &book.author {
         Some(author) => format!("{} — {author}", book.title),
         None => book.title.clone(),
     };
-    button.set_tooltip_text(Some(&name));
-    button.update_property(&[gtk::accessible::Property::Label(&name)]);
-    let child = gtk::FlowBoxChild::builder()
-        .child(&button)
-        .focusable(false)
-        .build();
-    child.set_widget_name(&book.id.to_string());
-    child
+    tile.set_tooltip_text(Some(&name));
+    tile.update_property(&[gtk::accessible::Property::Label(&name)]);
+    tile.add_css_class("book-tile");
+    // Every tile is the cover's width; long titles wrap rather than widen it.
+    adw::Clamp::builder()
+        .maximum_size(W)
+        .tightening_threshold(W)
+        .child(&tile)
+        .build()
+        .upcast()
 }
 
 /// Markdown blockquote with the note and source, for "Copy as Markdown".
