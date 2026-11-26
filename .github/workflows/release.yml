@@ -51,8 +51,8 @@ jobs:
           persist-credentials: false
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
-          manifest-path: flatpak/io.github.andrew_lawlor.Kollate.yml
-          bundle: kollate.flatpak
+          manifest-path: flatpak/io.github.andrew_lawlor.WordHoard.yml
+          bundle: word-hoard.flatpak
           artifact-name: flatpak
           cache: false
 
@@ -75,18 +75,18 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: |
-          sha256sum kollate.flatpak kollate_*.deb > SHA256SUMS
+          sha256sum word-hoard.flatpak word-hoard_*.deb > SHA256SUMS
           cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/kollate.flatpak
-            dist/kollate_*.deb
+            dist/word-hoard.flatpak
+            dist/word-hoard_*.deb
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           scripts/release-notes.py "$GITHUB_REF_NAME" > notes.md
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
-            --title "Kollate ${GITHUB_REF_NAME#v}" --notes-file notes.md \
-            dist/kollate.flatpak dist/kollate_*.deb dist/SHA256SUMS
+            --title "Word Hoard ${GITHUB_REF_NAME#v}" --notes-file notes.md \
+            dist/word-hoard.flatpak dist/word-hoard_*.deb dist/SHA256SUMS

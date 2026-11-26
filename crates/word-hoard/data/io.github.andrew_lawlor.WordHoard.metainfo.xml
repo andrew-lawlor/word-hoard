@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.andrew_lawlor.WordHoard</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Word Hoard</name>
+  <summary>E-reader highlights and handwriting</summary>
+  <developer id="io.github.andrew_lawlor">
+    <name>Andrew Lawlor</name>
+  </developer>
+  <description>
+    <p>
+      Plug in your Kobo e-reader and Word Hoard brings in everything you marked while
+      reading, in the Kobo's own reader or in KOReader: highlights, notes,
+      handwritten markups, notebooks and the words you looked up. It never changes
+      anything on the device, and never goes online.
+    </p>
+    <ul>
+      <li>Reads your handwriting as text, with a small model that runs on your computer; what you underlined comes word for word from the book</li>
+      <li>Curate as you read: a star, a question mark or a #tag in the margin files the passage, and a circled word goes to your vocabulary</li>
+      <li>Imports Basic and Advanced notebooks, every page redrawn and read</li>
+      <li>Finds the sentence each looked-up word came from, with an offline dictionary definition</li>
+      <li>Brings in KOReader's highlights, notes and vocabulary too, every colour included</li>
+      <li>Triage new highlights in an inbox from the keyboard; star, tag, edit and search everything</li>
+      <li>Share a highlight as a quote card, or email it to yourself</li>
+      <li>Sync notes to an Obsidian vault, and export Anki decks, JSON, CSV or Readwise CSV</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.andrew_lawlor.WordHoard.desktop</launchable>
+  <url type="homepage">https://github.com/andrew-lawlor/word-hoard</url>
+  <url type="bugtracker">https://github.com/andrew-lawlor/word-hoard/issues</url>
+  <url type="vcs-browser">https://github.com/andrew-lawlor/word-hoard</url>
+  <url type="help">https://github.com/andrew-lawlor/word-hoard/blob/main/docs/guide.md</url>
+  <branding>
+    <color type="primary" scheme_preference="light">#e4dcf3</color>
+    <color type="primary" scheme_preference="dark">#272137</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/andrew-lawlor/word-hoard/v0.5.1/docs/screenshots/markups.png</image>
+      <caption>A handwritten margin note, read as text, with the words underlined in the book</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/andrew-lawlor/word-hoard/v0.5.1/docs/screenshots/pen-question.png</image>
+      <caption>A question mark in the margin files the passage under “question”</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/andrew-lawlor/word-hoard/v0.5.1/docs/guide/notebooks.png</image>
+      <caption>A notebook page, redrawn from your ink and read as text</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/andrew-lawlor/word-hoard/v0.5.1/docs/screenshots/vocabulary.png</image>
+      <caption>Looked-up words, each in the sentence you met it, with a definition</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/andrew-lawlor/word-hoard/v0.5.1/docs/screenshots/inbox.png</image>
+      <caption>New highlights to triage in the Inbox</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/andrew-lawlor/word-hoard/v0.5.1/docs/screenshots/books.png</image>
+      <caption>Your library by cover</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <releases>
+    <release version="0.8.0" date="2026-11-26">
+      <description>
+        <p>Kollate is now Word Hoard. It does everything Kollate did, and will grow into a full ebook library for the Linux desktop.</p>
+        <ul>
+          <li>Your library moves over by itself the first time Word Hoard starts. In the Flatpak, move it once by hand: ~/.var/app/io.github.andrew_lawlor.Kollate/data/kollate becomes ~/.var/app/io.github.andrew_lawlor.WordHoard/data/word-hoard</li>
+          <li>Anki cards and Obsidian notes exported by Kollate keep updating in place, with your review history and your own writing intact</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.7.1" date="2026-10-05">
+      <description>
+        <p>What you underline or circle in KOReader keeps its punctuation.</p>
+        <ul>
+          <li>Passages marked in KOReader come in with their commas and full stops, and words with hyphens or apostrophes stay whole ("Nestor’s", "ocean-side"). Needs the Pencil plugin 0.6.6 or newer; markups written with older versions are joined with spaces as before</li>
+          <li>A KOReader passage is no longer cut short when it starts or ends next to a full stop</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-10-03">
+      <description>
+        <p>Handwriting written in KOReader is read too, with the Pencil plugin's maintained fork.</p>
+        <ul>
+          <li>Each page you write on in KOReader comes in as a markup, with the page as it looked, and your notes are read as on the Kobo</li>
+          <li>What you underline or circle in KOReader is taken from the positions of the words on the page, so it's always the book's exact text, and separate underlines on one page come in as separate passages</li>
+          <li>Circled words go to Vocabulary, and pen marks file passages, as they do from the Kobo</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.6.2" date="2026-10-03">
+      <description>
+        <p>The Kobo Elipsa 2E is supported, stylus and notebooks included.</p>
+        <ul>
+          <li>Notebook pages from the Elipsa 2E are drawn at the right size: its ink no longer runs off the edge of the page</li>
+          <li>A line of handwriting with wide gaps between words is read as one line, so a short word in it isn't misread on its own</li>
+          <li>The Elipsa 2E is named when it's connected</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.6.1" date="2026-10-02">
+      <description>
+        <p>Handwriting that arrives during a long reading is no longer left for later.</p>
+        <ul>
+          <li>Markups brought in by an import while handwriting is being read are read in the same session, not the next time Kollate starts</li>
+          <li>The progress of a long reading stays on screen through an import, coming back after its messages</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.6.0" date="2026-10-02">
+      <description>
+        <p>KOReader joins the Kobo's own reader: its highlights, notes and vocabulary come in too.</p>
+        <ul>
+          <li>KOReader's highlights and notes are imported from the same USB connection, wherever its book settings are kept</li>
+          <li>Highlights keep their colours by name, all nine of KOReader's alongside the Kobo's four</li>
+          <li>Words looked up in KOReader arrive with the sentence they were found in</li>
+          <li>A *, ? or #tag typed in a KOReader note files the highlight, as on the Kobo</li>
+          <li>Once a library has highlights from both readers, each card says which one it came from</li>
+          <li>Books without a cover from the Kobo get the cover from inside the book</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.2" date="2026-10-01">
+      <description>
+        <p>Handwriting is read more reliably, after measuring it against our own notes.</p>
+        <ul>
+          <li>A note written down the margin, even in two columns, is read whole and the right way up</li>
+          <li>A word circled in the book reaches Vocabulary even when the circle catches part of the next word</li>
+          <li>A note the model can't make out is left empty, not filled with repeated characters</li>
+          <li>Notes with accented letters (é, ñ) no longer stop the reading</li>
+          <li>Markups are read once more after updating, to pick up these fixes</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.1" date="2026-09-30">
+      <description>
+        <p>Getting ready for Flathub.</p>
+        <ul>
+          <li>Reading a lot of handwriting at once, as after a first import, now shows how far along it is</li>
+          <li>A fuller description and screenshots for software centres</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.5.0" date="2026-09-30">
+      <description>
+        <p>Quote cards: share a highlight as an image, or send it by email. And dictionaries for more languages, a click away.</p>
+        <ul>
+          <li>Share as Image… turns any highlight, note, markup or notebook page into a card, set in the Literata typeface, square or tall</li>
+          <li>Six palettes, including one tinted with the highlight's own Kobo colour; a markup's card can show the page with your ink</li>
+          <li>Copy the card, save it, or open an email in your email app with it attached. Set your own address in Preferences to send cards to yourself</li>
+          <li>Dictionaries for 16 more languages, as easy as handwriting models: Preferences suggests the languages your books are in, with a download link for each</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.2" date="2026-09-29">
+      <description>
+        <p>Small improvements to exports, and a new project page.</p>
+        <ul>
+          <li>On Anki cards, the gloss you wrote beside a circled word stands apart from the dictionary's definition</li>
+          <li>Obsidian notes no longer give handwritten markups a highlight colour</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-09-29">
+      <description>
+        <p>Fixes for reading handwriting.</p>
+        <ul>
+          <li>Passages you mark on a page are listed in page order, not the order you marked them in</li>
+          <li>A word an underline runs on to past a full stop, or a stray bracket, is left out of the marked text</li>
+          <li>If reading your handwriting fails, Kollate now says why, instead of leaving your markups unread without a word</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-09-29">
+      <description>
+        <p>Curate while you read, with a mark in the margin, as readers have for two thousand years. Kollate reads the mark along with your handwriting and does the filing.</p>
+        <ul>
+          <li>A star or NB stars a passage, a question mark tags it as a question, and #word tags it; type the same marks as a highlight's note on any Kobo</li>
+          <li>Circle a word to learn it: it goes to Vocabulary with the book's sentence and a definition, and a note written beside it becomes your gloss</li>
+          <li>Small circles around a word are no longer mistaken for handwriting; your markups are read once more after updating</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.0" date="2026-09-29">
+      <description>
+        <p>Kollate now imports the notebooks on a stylus Kobo, Basic and Advanced alike, and reads their handwriting on your computer. The Kobo itself only converts Advanced notebooks, and only when you ask.</p>
+        <ul>
+          <li>Each notebook appears as a book, and its pages in a new Notebooks view: your ink redrawn, with its writing as searchable, editable text</li>
+          <li>Drawings are left out of the text; pages you write more on or erase are read again at the next import</li>
+          <li>Qwen3-VL 2B is now the recommended handwriting model: it reads real notes as well as the 4B, and is smaller and faster</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.2.1" date="2026-09-29">
+      <description>
+        <p>Kollate now recognises the Kobo Clara Colour by name, and is tested on it with Kobo Store books alongside sideloaded ones.</p>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-09-27">
+      <description>
+        <p>Kollate now works with black-and-white Kobos as well as colour ones: it's tested on a Kobo Clara 2E alongside the Libra Colour. Together with reading your handwriting (since 0.1.7), this makes 0.2.0.</p>
+        <ul>
+          <li>Books you've since moved or removed on the Kobo keep a proper title and author, instead of a file name</li>
+          <li>Context sentences for vocabulary now come from many more books: those with embedded fonts were wrongly treated as locked</li>
+          <li>Footnote numbers no longer end up in context sentences</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.9" date="2026-09-27">
+      <description>
+        <p>Preferences now says which handwriting model is in use when only one is installed, instead of showing a checkbox that did nothing. Kollate also has a user guide, linked from its project page.</p>
+      </description>
+    </release>
+    <release version="0.1.8" date="2026-09-27">
+      <description>
+        <p>Handwritten notes with wide gaps between words are now read as one note, in the right order. They could be split into pieces and read out of order before.</p>
+      </description>
+    </release>
+    <release version="0.1.7" date="2026-09-27">
+      <description>
+        <p>Kollate can now read your stylus handwriting. Download one of three local models (recommended: Qwen3-VL 4B, 3.3 GB) with the links in Preferences and add it; after each import, Kollate reads your margin notes and takes the exact words you underlined or circled from the book. It all happens on your computer, never online, and every reading is a suggestion you can correct.</p>
+        <ul>
+          <li>Fixed: in the Flatpak, a markup's page could appear shifted under the ink</li>
+          <li>Handwritten notes appear in the Notes view and in search</li>
+          <li>Obsidian notes show a markup's ink along with its text</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.6" date="2026-09-26">
+      <description>
+        <p>Handwritten markups now show your ink. The Kobo saves the page and the ink as separate files, and Kollate was only showing the page. Markups are now shown zoomed in on the handwriting and the text it marks, so notes are readable at a glance; Open Page Image still shows the whole page.</p>
+        <ul>
+          <li>The Obsidian export includes the ink too, replacing earlier page images</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.5" date="2026-09-26">
+      <description>
+        <p>Kollate now imports from Kobo database versions it hasn't been tested with yet, instead of possibly failing without explanation. The first time it sees a new version, it tells you and offers a Report button that opens a compatibility report with your Kobo's details filled in.</p>
+        <ul>
+          <li>Selected highlights and the "deleted on Kobo" label keep their colours on older GNOME versions, such as Ubuntu 24.04</li>
+          <li>Releases are now built by GitHub Actions from the tagged source, with signed build provenance</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.4" date="2026-09-26">
+      <description>
+        <p>In the Flatpak, the Obsidian folder is now shown as its real location (for example ~/Notes/Reading) instead of an internal sandbox path. The check that stops Kollate writing to your Kobo now also sees through those paths, so a folder on the e-reader is refused even when chosen through the file picker.</p>
+      </description>
+    </release>
+    <release version="0.1.3" date="2026-09-26">
+      <description>
+        <p>Vocabulary definitions now come from the English Wiktionary (over 800,000 words, compiled by reader.dict) instead of WordNet. Words you've looked up are re-defined automatically, and definitions you wrote yourself are kept. Dictionaries for other languages can be added in DictFile format, and Preferences links to where to get them.</p>
+        <ul>
+          <li>Preferences lists dictionaries by language and explains how they're used</li>
+          <li>Notifications now appear on top of the Preferences and Export windows</li>
+          <li>Clearer explanation of where to write your own notes in Obsidian</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.2" date="2026-09-25">
+      <description>
+        <p>Kollate now refuses to save anything onto your Kobo, even if you choose it as an export, Obsidian or library location. The e-reader is only ever read.</p>
+      </description>
+    </release>
+    <release version="0.1.1" date="2026-09-25">
+      <description>
+        <p>Highlights deleted on the Kobo are now easier to track:</p>
+        <ul>
+          <li>The import summary reports highlights deleted on (and restored to) the Kobo</li>
+          <li>A Deleted on Kobo view lists them</li>
+          <li>A new preference can move them to Trash automatically</li>
+        </ul>
+        <p>A new Books page shows your library as covers, sorted by most recent; the sidebar keeps your five latest books, and books with nothing left to show are hidden.</p>
+        <p>Search is now always visible, starring a highlight in the Inbox also keeps it, and you can select several highlights to keep, archive, star or trash them at once, or keep the whole Inbox. A new Keyboard Shortcuts window (Ctrl+?) lists every shortcut.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-09-25">
+      <description>
+        <p>First release: import, curation, vocabulary enrichment and export.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,6 +1,6 @@
-# Kollate user guide
+# Word Hoard user guide
 
-For Kollate 0.7.1. Kollate brings everything you mark on a Kobo e-reader, in its own reader or in KOReader — highlights, notes, stylus markups, notebooks and Vocabulary Builder words — into a library on your computer, where you can triage it, correct it, read your handwriting as text, and export it to Obsidian, Anki and more. It never writes to your Kobo and never goes online.
+For Word Hoard 0.7.1. Word Hoard brings everything you mark on a Kobo e-reader, in its own reader or in KOReader — highlights, notes, stylus markups, notebooks and Vocabulary Builder words — into a library on your computer, where you can triage it, correct it, read your handwriting as text, and export it to Obsidian, Anki and more. It never writes to your Kobo and never goes online.
 
 **Contents**
 
@@ -22,12 +22,12 @@ For Kollate 0.7.1. Kollate brings everything you mark on a Kobo e-reader, in its
 
 ## 1. Install
 
-Download a package from the [latest release](https://github.com/andrew-lawlor/kollate/releases/latest).
+Download a package from the [latest release](https://github.com/andrew-lawlor/word-hoard/releases/latest).
 
 **Flatpak** (any distribution):
 
 ```sh
-flatpak install --user kollate.flatpak
+flatpak install --user word-hoard.flatpak
 ```
 
 Flatpak installs the GNOME runtime from Flathub if you don't have it. The Flatpak can only *read* `/media` and `/run/media`, where a Kobo is mounted, and has no network access.
@@ -35,32 +35,32 @@ Flatpak installs the GNOME runtime from Flathub if you don't have it. The Flatpa
 **Debian 13 or Ubuntu 24.04 and newer** (`.deb`):
 
 ```sh
-sudo apt install ./kollate_0.7.1-1_amd64.deb
+sudo apt install ./word-hoard_0.7.1-1_amd64.deb
 ```
 
-This also installs `kollate-cli`, the [command-line tool](#11-the-command-line).
+This also installs `word-hoard-cli`, the [command-line tool](#11-the-command-line).
 
-**Checking a download.** Every release file is built by GitHub Actions from the tagged source. To confirm a file came from that build, not somewhere else: `gh attestation verify kollate.flatpak --repo andrew-lawlor/kollate`. The release also lists `SHA256SUMS`.
+**Checking a download.** Every release file is built by GitHub Actions from the tagged source. To confirm a file came from that build, not somewhere else: `gh attestation verify word-hoard.flatpak --repo andrew-lawlor/word-hoard`. The release also lists `SHA256SUMS`.
 
 ## 2. Connect your Kobo and import
 
-Start Kollate and connect your Kobo with its USB cable. When the Kobo asks, choose **Connect**. Kollate notices it and a banner appears:
+Start Word Hoard and connect your Kobo with its USB cable. When the Kobo asks, choose **Connect**. Word Hoard notices it and a banner appears:
 
-![Kollate with a banner saying "Your Kobo Libra Colour is connected" and, with Ask first chosen, an Import button](guide/connected.png)
+![Word Hoard with a banner saying "Your Kobo Libra Colour is connected" and, with Ask first chosen, an Import button](guide/connected.png)
 
-By default Kollate imports straight away. You can change this under **Preferences → When a Kobo Is Connected**:
+By default Word Hoard imports straight away. You can change this under **Preferences → When a Kobo Is Connected**:
 
 - **Import automatically** (the default).
 - **Ask first**: the banner offers an **Import** button.
 - **Do nothing**: import when you want with **Import from Kobo** (the Kobo button in the top left, or **Ctrl+I**).
 
-When you're done, press **Eject** in the banner, then unplug. You can also eject at any time during use: Kollate reads a copy of the Kobo's database, never the original, and holds nothing open on the device.
+When you're done, press **Eject** in the banner, then unplug. You can also eject at any time during use: Word Hoard reads a copy of the Kobo's database, never the original, and holds nothing open on the device.
 
 **Looking for something to read?** [Standard Ebooks](https://standardebooks.org) makes free, carefully produced editions of public-domain classics, with a Kobo edition (kepub) of each. Every book in this guide's screenshots is one of theirs.
 
 ### What gets imported
 
-| From your Kobo | In Kollate |
+| From your Kobo | In Word Hoard |
 |---|---|
 | Highlights, in all four colours | Highlights, sorted into chapters in reading order |
 | Notes you typed on a highlight | The highlight's note |
@@ -69,15 +69,15 @@ When you're done, press **Eject** in the banner, then unplug. You can also eject
 | Vocabulary Builder words | [Vocabulary](#7-vocabulary), with the sentence you looked each word up in and a definition |
 | Book covers, titles, authors, progress | The [Books](#books) page |
 
-Page bookmarks (dog-ears) aren't imported. For books bought from the Kobo Store, which are locked with DRM, Kollate can't read the book text: their highlights import normally, but vocabulary words get no context sentence and markups get no exact marked text.
+Page bookmarks (dog-ears) aren't imported. For books bought from the Kobo Store, which are locked with DRM, Word Hoard can't read the book text: their highlights import normally, but vocabulary words get no context sentence and markups get no exact marked text.
 
 To import from a backup of a Kobo rather than the device, use **Main Menu → Import from Folder…** and choose the folder that contains `.kobo`.
 
 ### KOReader
 
-If KOReader is installed on your Kobo, Kollate imports from it in the same go, with nothing to set up:
+If KOReader is installed on your Kobo, Word Hoard imports from it in the same go, with nothing to set up:
 
-| From KOReader | In Kollate |
+| From KOReader | In Word Hoard |
 |---|---|
 | Highlights, in all nine colours | Highlights, in their colours, by chapter |
 | Notes on a highlight | The highlight's note, with a `*`, `NB` or `?` on a line of its own, or a `#tag` anywhere, [filed as a mark](#mark-it-in-the-margin) |
@@ -88,11 +88,11 @@ Once your library has anything from KOReader, every card says which reader it ca
 
 ### Importing again
 
-Import as often as you like. Kollate recognises everything it has seen before, even after a Kobo factory reset or when a book is re-sent from calibre, so **nothing is ever duplicated**. Only what's new or changed comes in, and a notice tells you what happened ("3 new highlights · 2 new words").
+Import as often as you like. Word Hoard recognises everything it has seen before, even after a Kobo factory reset or when a book is re-sent from calibre, so **nothing is ever duplicated**. Only what's new or changed comes in, and a notice tells you what happened ("3 new highlights · 2 new words").
 
-- **Edited on the Kobo:** if you change a highlight's note on the Kobo, Kollate updates it — unless you've edited it in Kollate too. Then your version stays and the card shows **changed on Kobo**; the card's menu has **Use Kobo's Version**.
-- **Deleted on the Kobo:** Kollate keeps it. The card shows **deleted on Kobo**, and a **Deleted on Kobo** view appears in the sidebar. If you'd rather they go to Kollate's Trash, change **Preferences → When a Highlight Is Deleted on the Kobo**; they come back out of Trash if they reappear on the Kobo.
-- **A new kind of Kobo:** Kollate is tested on a Kobo Libra Colour, Clara Colour, Clara 2E and Elipsa 2E. If your Kobo's database is a version Kollate hasn't been tested with, it imports anyway and shows a notice once, with a **Report** button that opens a pre-filled compatibility report. Reports, even "it all worked", are very welcome.
+- **Edited on the Kobo:** if you change a highlight's note on the Kobo, Word Hoard updates it — unless you've edited it in Word Hoard too. Then your version stays and the card shows **changed on Kobo**; the card's menu has **Use Kobo's Version**.
+- **Deleted on the Kobo:** Word Hoard keeps it. The card shows **deleted on Kobo**, and a **Deleted on Kobo** view appears in the sidebar. If you'd rather they go to Word Hoard's Trash, change **Preferences → When a Highlight Is Deleted on the Kobo**; they come back out of Trash if they reappear on the Kobo.
+- **A new kind of Kobo:** Word Hoard is tested on a Kobo Libra Colour, Clara Colour, Clara 2E and Elipsa 2E. If your Kobo's database is a version Word Hoard hasn't been tested with, it imports anyway and shows a notice once, with a **Report** button that opens a pre-filled compatibility report. Reports, even "it all worked", are very welcome.
 
 ## 3. Triage the Inbox
 
@@ -123,7 +123,7 @@ Keeping, archiving, starring and trashing can all be undone from the notice that
 
 ## 4. Find your way around
 
-![A handwritten margin note on a page of the Odyssey, the underlined sentence taken from the book, and the note as Kollate read it](screenshots/markups.png)
+![A handwritten margin note on a page of the Odyssey, the underlined sentence taken from the book, and the note as Word Hoard read it](screenshots/markups.png)
 
 The sidebar has these views:
 
@@ -131,7 +131,7 @@ The sidebar has these views:
 |---|---|
 | **Inbox** | New, not yet triaged |
 | **All Highlights** | Everything except Archive and Trash |
-| **Notes** | Highlights with a note, including handwritten notes Kollate has read |
+| **Notes** | Highlights with a note, including handwritten notes Word Hoard has read |
 | **Markups** | Your stylus markups |
 | **Notebooks** | Pages of your Kobo notebooks (appears once you have some) |
 | **Starred** | Starred highlights |
@@ -150,7 +150,7 @@ The **Books** page shows every book with highlights or looked-up words, sorted b
 
 ### Search
 
-The search field at the top of every page (**Ctrl+F**) filters what's shown as you type. In highlight views it searches the text, notes (including handwriting Kollate has read), chapters, book titles, authors and tags; on the Books page, titles and authors; in Vocabulary, words, definitions and sentences. **Escape** clears it.
+The search field at the top of every page (**Ctrl+F**) filters what's shown as you type. In highlight views it searches the text, notes (including handwriting Word Hoard has read), chapters, book titles, authors and tags; on the Books page, titles and authors; in Vocabulary, words, definitions and sentences. **Escape** clears it.
 
 ![Searching All Highlights for "fate" finds a markup whose handwritten note was read as text](guide/search.png)
 
@@ -163,32 +163,32 @@ A card's **⋮** menu has **Copy Text**, and **Copy as Markdown**: the highlight
 **Share as Image…** in a card's **⋮** menu turns a highlight, note, markup or notebook page into a quote card: the words in a reading typeface, your note under them if you like, and the book at the foot. Choose **Square** or **Tall** (the shape social feeds prefer), a **Palette**, and for a markup whether to **Show the Page** with your ink on it. The palettes: **Paper** (a book page), **Night** (dark), **Sepia**, **Highlight** (a soft tint of the highlight's own Kobo colour, so a pink highlight makes a pink card), **Ink** (black and white) and **E-ink** (the grey of your Kobo's screen). Then:
 
 - **Copy** puts the image on the clipboard, to paste anywhere.
-- **Email…** opens a new email in your email app (Thunderbird, Evolution…) with the card attached and the quote in the message, for sending to a friend, or to yourself to have it on your phone. Put your own address in **Preferences → Sharing → Email Cards To**, and every card's email is addressed to you. Kollate sends nothing: it's your email app that sends it, if you press Send. The app used is the one set in your system settings (in GNOME, **Settings → Apps → Default Apps → Mail**).
+- **Email…** opens a new email in your email app (Thunderbird, Evolution…) with the card attached and the quote in the message, for sending to a friend, or to yourself to have it on your phone. Put your own address in **Preferences → Sharing → Email Cards To**, and every card's email is addressed to you. Word Hoard sends nothing: it's your email app that sends it, if you press Send. The app used is the one set in your system settings (in GNOME, **Settings → Apps → Default Apps → Mail**).
 - **Save…** saves it as a PNG.
 
-Kollate remembers your choices for next time.
+Word Hoard remembers your choices for next time.
 
 ### Dark mode
 
-Kollate follows your desktop's light or dark style.
+Word Hoard follows your desktop's light or dark style.
 
 ## 5. Edit highlights, notes and tags
 
 Press **E** (or **Enter**, or **Edit…** in the card's menu) to correct a typo in a highlight, rewrite a note, or add tags (separated by commas).
 
-Kollate never loses the original. Once you've edited something, the dialog shows **On Your Kobo** with the original and a **Restore Kobo Version** button, and the card shows **edited**. Your edits survive every future import.
+Word Hoard never loses the original. Once you've edited something, the dialog shows **On Your Kobo** with the original and a **Restore Kobo Version** button, and the card shows **edited**. Your edits survive every future import.
 
-For a markup, the dialog edits the **Marked Text** and the **Note** that Kollate [read from your handwriting](#6-read-your-handwriting); once edited, it shows **Read From Handwriting** with the model's reading and a **Restore Transcription** button:
+For a markup, the dialog edits the **Marked Text** and the **Note** that Word Hoard [read from your handwriting](#6-read-your-handwriting); once edited, it shows **Read From Handwriting** with the model's reading and a **Restore Transcription** button:
 
 ![The Edit Markup dialog, with the marked text and the handwritten note as editable fields](guide/edit-markup.png)
 
 ## 6. Read your handwriting
 
-On a Kobo with a stylus, the notes you write in the margin, and what you underline or circle, are saved as pictures. Kollate can turn them into text — on your computer, with a small AI model you download once. Nothing is sent anywhere, and Kollate itself never downloads anything: the app has no network access.
+On a Kobo with a stylus, the notes you write in the margin, and what you underline or circle, are saved as pictures. Word Hoard can turn them into text — on your computer, with a small AI model you download once. Nothing is sent anywhere, and Word Hoard itself never downloads anything: the app has no network access.
 
 ### What it does
 
-For each markup, Kollate:
+For each markup, Word Hoard:
 
 1. **Separates your notes from your marks** using the shape and order of your pen strokes. Writing turned sideways in a margin is turned upright the way you wrote it.
 2. **Takes the words you underlined or circled from the book itself**, so they're exact, down to the book's punctuation. This needs a sideloaded, DRM-free book, and your Kobo connected when the markup was imported.
@@ -199,11 +199,11 @@ The marked text becomes the markup's text and your handwriting its note, so both
 
 ### Notebooks
 
-Pages of your Kobo notebooks are read the same way, whole: Kollate finds the lines of writing on the page, reads them one by one, and leaves drawings out (shapes, arrows, doodles; a short label beside them is still read). This works for **Basic** notebooks too, which the Kobo can't turn into text, and needs no **Convert** on the Kobo for Advanced ones.
+Pages of your Kobo notebooks are read the same way, whole: Word Hoard finds the lines of writing on the page, reads them one by one, and leaves drawings out (shapes, arrows, doodles; a short label beside them is still read). This works for **Basic** notebooks too, which the Kobo can't turn into text, and needs no **Convert** on the Kobo for Advanced ones.
 
 ![A notebook page of reading notes and a drawing of the way from Troy to Ithaca, redrawn from the Kobo's ink, with its writing read as text below it](guide/notebooks.png)
 
-Each notebook appears as a book, with the Kobo's picture of it as its cover, and its pages in the **Notebooks** view. A page's text is its highlight text: search it, edit it with **E**, star, tag and export it like anything else. Pages you add or write more on are read again at the next import; your corrections stay. If a notebook comes from a newer Kobo that stores notebooks differently, Kollate leaves it out and keeps what it already has.
+Each notebook appears as a book, with the Kobo's picture of it as its cover, and its pages in the **Notebooks** view. A page's text is its highlight text: search it, edit it with **E**, star, tag and export it like anything else. Pages you add or write more on are read again at the next import; your corrections stay. If a notebook comes from a newer Kobo that stores notebooks differently, Word Hoard leaves it out and keeps what it already has.
 
 ### Set it up
 
@@ -215,8 +215,8 @@ Each notebook appears as a book, with the Kobo's picture of it as its cover, and
    | Qwen3-VL 4B | 3.3 GB | A little more accurate on hurried handwriting |
    | Qwen3-VL 8B | 6.2 GB | The most accurate; best with a graphics card |
 
-2. When both files have **finished** downloading, press **+** in the Handwriting group and select both. (Browsers create the file before it's complete; if you pick it too early, Kollate says it hasn't finished downloading.)
-3. Kollate checks the files against their known checksums, copies them into your library, and starts reading your markups in the background. It also reads new markups after every import.
+2. When both files have **finished** downloading, press **+** in the Handwriting group and select both. (Browsers create the file before it's complete; if you pick it too early, Word Hoard says it hasn't finished downloading.)
+3. Word Hoard checks the files against their known checksums, copies them into your library, and starts reading your markups in the background. It also reads new markups after every import.
 
 ![Preferences, with the Handwriting group listing the three models, one in use, and the graphics card switch](guide/preferences.png)
 
@@ -232,9 +232,9 @@ If you install more than one model, Preferences lets you choose which to use. Ch
 
 ### Mark it in the margin
 
-You can triage while you read, with the pen: write a mark beside a passage you've underlined or circled, and Kollate acts on it when it reads the page.
+You can triage while you read, with the pen: write a mark beside a passage you've underlined or circled, and Word Hoard acts on it when it reads the page.
 
-| Write | Kollate |
+| Write | Word Hoard |
 |---|---|
 | `*` or a drawn star | Stars it (and keeps it, as starring in the Inbox does) |
 | `NB` | Stars it |
@@ -243,7 +243,7 @@ You can triage while you read, with the pen: write a mark beside a passage you'v
 
 ![A passage from Moby-Dick underlined with a question mark in the margin, shown under the question tag](screenshots/pen-question.png)
 
-`*`, `NB` and `?` count on their own: a note like "why?" stays a note. `#word` counts anywhere in a note, and is taken out of it; a tag one letter off one you have (`#leadershp`) joins it. Each mark takes effect once: if you unstar or untag something in Kollate, it stays that way when the page is read again.
+`*`, `NB` and `?` count on their own: a note like "why?" stays a note. `#word` counts anywhere in a note, and is taken out of it; a tag one letter off one you have (`#leadershp`) joins it. Each mark takes effect once: if you unstar or untag something in Word Hoard, it stays that way when the page is read again.
 
 Two things to know. The Kobo keeps everything you mark on a page in one visit as one markup, so a mark applies to all of it. And a star drawn next to an ordinary highlight doesn't attach to it; there, type the mark as the highlight's note instead. Typed notes work on any Kobo, with or without a stylus: type `#leadership`, `NB` or `?` as a highlight's note.
 
@@ -253,14 +253,14 @@ Circle a single word on the page and it goes to [Vocabulary](#7-vocabulary), wit
 
 ![The word "daemon" in Vocabulary: its definition, the gloss written beside it on the page, and the sentence it was circled in](screenshots/pen-gloss.png)
 
-> **Old habits.** None of this is new. Around 150 BC, Aristarchus, head of the Library at Alexandria, edited Homer with signs in the margin, among them the *asteriskos*, "little star", where our asterisk comes from. Medieval readers wrote *nota bene* beside what mattered, and *quaere*, "inquire", beside what they doubted. A hard word got a *gloss*, its meaning written above it or in the margin; collected, glosses became the first glossaries. Readers from Erasmus to Locke kept commonplace books, copying passages under headings, as tags do. And scriptoria *collated* their copies against the original, which is where Kollate's name comes from.
+> **Old habits.** None of this is new. Around 150 BC, Aristarchus, head of the Library at Alexandria, edited Homer with signs in the margin, among them the *asteriskos*, "little star", where our asterisk comes from. Medieval readers wrote *nota bene* beside what mattered, and *quaere*, "inquire", beside what they doubted. A hard word got a *gloss*, its meaning written above it or in the margin; collected, glosses became the first glossaries. Readers from Erasmus to Locke kept commonplace books, copying passages under headings, as tags do. And scriptoria *collated* their copies against the original, which is where Word Hoard's name comes from.
 
 ## 7. Vocabulary
 
 Every word you looked up in the Kobo's dictionary appears in **Vocabulary**, with:
 
 - **The sentence you met it in**, found inside the book (sideloaded, DRM-free books; the Kobo doesn't record this itself).
-- **A definition** from Kollate's offline English Wiktionary.
+- **A definition** from Word Hoard's offline English Wiktionary.
 
 Words you [circled on the page](#circle-a-word-to-learn-it) appear here too, marked **Circled in** their book in the word's dialog, with your gloss if you wrote one.
 
@@ -274,7 +274,7 @@ Words that share a dictionary form ("leviathans", "leviathan") are merged into o
 
 ### Other languages
 
-Kollate includes the English Wiktionary. Free Wiktionary dictionaries for 16 more languages, compiled by reader.dict, are a click away, the same way as handwriting models: **Preferences → Get a Dictionary** suggests the languages your books are in (a Spanish novel brings up Spanish), with every other language under **More Languages**. Press **Download**, and when it's done, add the file with **+** under Dictionaries (the file chooser opens in your Downloads folder). Words already in Vocabulary in that language are defined straight away. StarDict (`.ifo`) and kaikki.org (`.jsonl`) dictionaries can be added with **+** too. reader.dict is made by volunteers; the same group has links to their website and to **Donate**, if their dictionaries help you. Each word is looked up in the dictionaries for its language; dictionaries you add are tried before the included one.
+Word Hoard includes the English Wiktionary. Free Wiktionary dictionaries for 16 more languages, compiled by reader.dict, are a click away, the same way as handwriting models: **Preferences → Get a Dictionary** suggests the languages your books are in (a Spanish novel brings up Spanish), with every other language under **More Languages**. Press **Download**, and when it's done, add the file with **+** under Dictionaries (the file chooser opens in your Downloads folder). Words already in Vocabulary in that language are defined straight away. StarDict (`.ifo`) and kaikki.org (`.jsonl`) dictionaries can be added with **+** too. reader.dict is made by volunteers; the same group has links to their website and to **Donate**, if their dictionaries help you. Each word is looked up in the dictionaries for its language; dictionaries you add are tried before the included one.
 
 ## 8. Export
 
@@ -284,10 +284,10 @@ Open **Export** with **Ctrl+E** or the button in the top left.
 
 ### Obsidian
 
-Choose a folder in your vault and press **Sync**. Kollate writes one note per book, plus a Vocabulary note, and rewrites them each time it syncs; turn on **Sync After Every Import** to keep them current. Markups appear with their ink and the text Kollate read.
+Choose a folder in your vault and press **Sync**. Word Hoard writes one note per book, plus a Vocabulary note, and rewrites them each time it syncs; turn on **Sync After Every Import** to keep them current. Markups appear with their ink and the text Word Hoard read.
 
-- **Your own writing is safe below the `kollate:user` line** at the bottom of each book's note: Kollate never changes that part.
-- For a thought about one highlight, add a note to it in Kollate (**E**); it appears under the highlight.
+- **Your own writing is safe below the `kollate:user` line** at the bottom of each book's note: Word Hoard never changes that part.
+- For a thought about one highlight, add a note to it in Word Hoard (**E**); it appears under the highlight.
 - Every highlight can be linked to individually (`[[Book#^k123]]`).
 
 ### Anki
@@ -300,7 +300,7 @@ Choose a folder in your vault and press **Sync**. Kollate writes one note per bo
 - **Highlights** and **Vocabulary:** CSV.
 - **Readwise:** CSV in Readwise's import format.
 
-**Include Archived Highlights** adds archived ones to exports; trashed highlights are only ever in the backup. Kollate refuses to write any export onto your Kobo.
+**Include Archived Highlights** adds archived ones to exports; trashed highlights are only ever in the backup. Word Hoard refuses to write any export onto your Kobo.
 
 ## 9. Preferences
 
@@ -317,7 +317,7 @@ Choose a folder in your vault and press **Sync**. Kollate writes one note per bo
 
 ## 10. Keyboard shortcuts
 
-Press **Ctrl+?** in Kollate to see these at any time.
+Press **Ctrl+?** in Word Hoard to see these at any time.
 
 ![The Keyboard Shortcuts overview](guide/shortcuts.png)
 
@@ -345,21 +345,21 @@ Press **Ctrl+?** in Kollate to see these at any time.
 
 ## 11. The command line
 
-`kollate-cli` does the same work from a terminal. It comes with the `.deb`; with the Flatpak, run it as `flatpak run --command=kollate-cli io.github.andrew_lawlor.Kollate …`.
+`word-hoard-cli` does the same work from a terminal. It comes with the `.deb`; with the Flatpak, run it as `flatpak run --command=word-hoard-cli io.github.andrew_lawlor.WordHoard …`.
 
 ```sh
-kollate-cli inspect /media/$USER/KOBOeReader          # what's on the Kobo (read-only)
-kollate-cli import  /media/$USER/KOBOeReader --dry-run
-kollate-cli import  /media/$USER/KOBOeReader
-kollate-cli library                                    # what's in your library
+word-hoard-cli inspect /media/$USER/KOBOeReader          # what's on the Kobo (read-only)
+word-hoard-cli import  /media/$USER/KOBOeReader --dry-run
+word-hoard-cli import  /media/$USER/KOBOeReader
+word-hoard-cli library                                    # what's in your library
 
-kollate-cli models                                     # handwriting models, with download links
-kollate-cli models add ~/Downloads/*.gguf              # add downloaded model files
-kollate-cli transcribe                                 # read handwriting waiting for the model
+word-hoard-cli models                                     # handwriting models, with download links
+word-hoard-cli models add ~/Downloads/*.gguf              # add downloaded model files
+word-hoard-cli transcribe                                 # read handwriting waiting for the model
 
-kollate-cli export obsidian ~/Vault/Books
-kollate-cli export anki Kollate.apkg --highlights
-kollate-cli export json backup.json                    # also: csv, vocab-csv, readwise
+word-hoard-cli export obsidian ~/Vault/Books
+word-hoard-cli export anki Word Hoard.apkg --highlights
+word-hoard-cli export json backup.json                    # also: csv, vocab-csv, readwise
 ```
 
 Add `--library PATH` to use a library other than the default, `--help` to any command for its options.
@@ -368,24 +368,24 @@ Add `--library PATH` to use a library other than the default, `--help` to any co
 
 **Where it is.** Your library is a folder:
 
-- `~/.local/share/kollate/` (`.deb` and source builds)
-- `~/.var/app/io.github.andrew_lawlor.Kollate/data/kollate/` (Flatpak)
+- `~/.local/share/word-hoard/` (`.deb` and source builds)
+- `~/.var/app/io.github.andrew_lawlor.WordHoard/data/word-hoard/` (Flatpak)
 
 It holds `library.db` (everything you've imported and edited), copied covers and markup pages, dictionaries you added, and handwriting models (`models/`, the largest part). **Preferences → Library** shows the exact path.
 
 **Backing up.** Copy the folder, or use **Export → Backup** for a JSON file of everything.
 
-**Privacy.** Everything stays on your computer. Kollate has no accounts, no analytics and, in the Flatpak, no network access. Handwriting is read by a model running on your computer.
+**Privacy.** Everything stays on your computer. Word Hoard has no accounts, no analytics and, in the Flatpak, no network access. Handwriting is read by a model running on your computer.
 
-**Your Kobo.** Kollate only ever reads from it. It copies the Kobo's database before reading, never writes a file to the device, and refuses to save exports or its library there even if you choose it.
+**Your Kobo.** Word Hoard only ever reads from it. It copies the Kobo's database before reading, never writes a file to the device, and refuses to save exports or its library there even if you choose it.
 
-**Removing Kollate.** Uninstall the package, then delete the library folder above if you want your data gone too.
+**Removing Word Hoard.** Uninstall the package, then delete the library folder above if you want your data gone too.
 
 ## 13. Troubleshooting
 
-**Kollate doesn't notice my Kobo.** Make sure you chose **Connect** on the Kobo and that it appears in your file manager. Or import it directly: **Main Menu → Import from Folder…** and choose the Kobo (the folder containing `.kobo`).
+**Word Hoard doesn't notice my Kobo.** Make sure you chose **Connect** on the Kobo and that it appears in your file manager. Or import it directly: **Main Menu → Import from Folder…** and choose the Kobo (the folder containing `.kobo`).
 
-**A book's vocabulary words have no sentence, or a markup has no marked text.** The book is probably from the Kobo Store (DRM-protected), so Kollate can't read its text. Sideloaded, DRM-free books work. For markups, the Kobo must also be connected when they're imported.
+**A book's vocabulary words have no sentence, or a markup has no marked text.** The book is probably from the Kobo Store (DRM-protected), so Word Hoard can't read its text. Sideloaded, DRM-free books work. For markups, the Kobo must also be connected when they're imported.
 
 **"… hasn't finished downloading."** Wait for your browser to finish, then add the file again.
 
@@ -395,8 +395,8 @@ It holds `library.db` (everything you've imported and edited), copied covers and
 
 **"Not available on this computer."** Reading handwriting needs a processor from about 2013 or later (with AVX2).
 
-**The same book appears twice.** If a book is re-sent under a different title or author (for example after editing it in calibre), the Kobo can store it at a new path, and Kollate may list it as a new book. Your earlier highlights stay with the original entry.
+**The same book appears twice.** If a book is re-sent under a different title or author (for example after editing it in calibre), the Kobo can store it at a new path, and Word Hoard may list it as a new book. Your earlier highlights stay with the original entry.
 
-**A notice about an untested database version.** Your Kobo's software is newer (or older) than the version Kollate was tested with. Kollate imported anyway; please check your highlights look right, and use **Report** to tell us how it went.
+**A notice about an untested database version.** Your Kobo's software is newer (or older) than the version Word Hoard was tested with. Word Hoard imported anyway; please check your highlights look right, and use **Report** to tell us how it went.
 
-Something else? [Open an issue](https://github.com/andrew-lawlor/kollate/issues/new/choose).
+Something else? [Open an issue](https://github.com/andrew-lawlor/word-hoard/issues/new/choose).

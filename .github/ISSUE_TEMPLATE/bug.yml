@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Kollate doesn't work as it should.
+description: Something in Word Hoard doesn't work as it should.
 labels: [bug]
 body:
   - type: textarea
@@ -10,10 +10,10 @@ body:
     validations:
       required: true
   - type: input
-    id: kollate_version
+    id: word-hoard_version
     attributes:
-      label: Kollate version and package
-      description: The version is in *Main Menu → About Kollate*.
+      label: Word Hoard version and package
+      description: The version is in *Main Menu → About Word Hoard*.
       placeholder: 0.1.4, Flatpak
     validations:
       required: true

@@ -1,0 +1,12 @@
+[package]
+name = "word-hoard-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hoard-core = { path = "../hoard-core" }
+hoard-transcribe = { path = "../hoard-transcribe" }
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true

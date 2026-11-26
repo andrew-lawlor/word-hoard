@@ -1,42 +1,45 @@
 <p align="center">
-  <img src="docs/hero.png" alt="Kollate: your e-reader highlights, notes and handwriting, curated on Linux. Kobo, KOReader; offline and private. Verba volant, scripta manent: spoken words fly away, written words remain. A handwritten note on a page of the Odyssey, read as text, in front of the Inbox.">
+  <img src="docs/hero.png" alt="Word Hoard: your e-reader highlights, notes and handwriting, curated on Linux. Kobo, KOReader; offline and private. Verba volant, scripta manent: spoken words fly away, written words remain. A handwritten note on a page of the Odyssey, read as text, in front of the Inbox.">
 </p>
 
 <p align="center">
   <b>Everything you mark on your e-reader, read, sorted and put to work.</b><br>
-  Highlights and notes from your Kobo, in its own reader (Nickel) or in KOReader. Kollate turns your margin notes<br>
+  Highlights and notes from your Kobo, in its own reader (Nickel) or in KOReader. Word Hoard turns your margin notes<br>
   and notebooks into text, files what you star and tag with the pen, and makes flashcards from the words you look up.<br>
   <sub>A native Linux app for GNOME and any desktop. Offline, private, and it never writes to your e-reader.</sub>
 </p>
 
 <p align="center">
-  <a href="https://github.com/andrew-lawlor/kollate/releases/latest"><b>Download</b></a> ·
+  <a href="https://github.com/andrew-lawlor/word-hoard/releases/latest"><b>Download</b></a> ·
   <a href="docs/guide.md"><b>User guide</b></a> ·
-  <a href="SPEC.md">Design notes</a>
+  <a href="SPEC.md">Spec</a> ·
+  <a href="docs/design/kollate-notes.md">Design notes</a>
 </p>
+
+> **Word Hoard was called Kollate until 0.8.** It does everything Kollate did, and is growing into a full ebook library for the Linux desktop: books, Kobo sync, curation and an assistant beside your highlights ([spec](SPEC.md)). Coming from Kollate? Your library moves over by itself on first start; see the [0.8.0 notes](crates/word-hoard/data/io.github.andrew_lawlor.WordHoard.metainfo.xml) for the Flatpak.
 
 <p align="center"><i>"It is a comforting thing to have an archive: a place where the scattered leaves of memory are bound together."</i></p>
 
-E-readers hoard what you write in them. Kollate pulls it all onto your computer, into one searchable library. Your data never leaves your machine.
+E-readers hoard what you write in them. Word Hoard pulls it all onto your computer, into one searchable library. Your data never leaves your machine.
 
 What follows is an example week of reading with it in your workflow.
 
 ## Your handwriting, read as text
 
-Kollate reads the scrawl in your margins. Notes turn into searchable text, and whatever you underlined or circled comes back as the book's own words. A small vision model does the reading on your machine. When it stumbles, you correct it.
+Word Hoard reads the scrawl in your margins. Notes turn into searchable text, and whatever you underlined or circled comes back as the book's own words. A small vision model does the reading on your machine. When it stumbles, you correct it.
 
 <p align="center">
-  <img src="docs/screenshots/markups.png" alt="A page of the Odyssey with two lines underlined and a handwritten note. Below it, the underlined lines taken from the book, and the note as Kollate read it.">
+  <img src="docs/screenshots/markups.png" alt="A page of the Odyssey with two lines underlined and a handwritten note. Below it, the underlined lines taken from the book, and the note as Word Hoard read it.">
 </p>
 <p align="center">
-  <i>Monday, Book XVIII of the Odyssey: a passage underlined, a thought in the margin. Kollate reads both.</i>
+  <i>Monday, Book XVIII of the Odyssey: a passage underlined, a thought in the margin. Word Hoard reads both.</i>
 </p>
 
 ## Curate with the pen
 
 Filing highlights is usually a chore for later. Do it in the margin instead, with marks readers have used for centuries.
 
-| In the margin | In Kollate |
+| In the margin | In Word Hoard |
 |---|---|
 | `*` (or a drawn star), or `NB` | Starred |
 | `?` | Tagged `question` |
@@ -46,7 +49,7 @@ Filing highlights is usually a chore for later. Do it in the margin instead, wit
 
 | | |
 |---|---|
-| ![A passage from Moby-Dick underlined, with a question mark written in the margin, tagged "question" in Kollate](docs/screenshots/pen-question.png) | ![The word "daemon", circled on a page of Frankenstein, in Vocabulary with its definition, the gloss written beside it, and the sentence it was circled in](docs/screenshots/pen-gloss.png) |
+| ![A passage from Moby-Dick underlined, with a question mark written in the margin, tagged "question" in Word Hoard](docs/screenshots/pen-question.png) | ![The word "daemon", circled on a page of Frankenstein, in Vocabulary with its definition, the gloss written beside it, and the sentence it was circled in](docs/screenshots/pen-gloss.png) |
 | *Tuesday: a `?` beside Melville's white whale files the passage under `question`…* | *…and "daemon", circled in Frankenstein, arrives in Vocabulary with the gloss written beside it.* |
 
 Without a stylus, type the mark into a highlight's note. Any Kobo, same result.
@@ -55,7 +58,7 @@ The asterisk began as the *asteriskos*, a little star Alexandria's librarians pi
 
 ## Notebooks, Basic and Advanced
 
-The Kobo converts handwriting only in Advanced notebooks, and only on request. Kollate transcribes every page of both kinds and redraws the ink above the text.
+The Kobo converts handwriting only in Advanced notebooks, and only on request. Word Hoard transcribes every page of both kinds and redraws the ink above the text.
 
 <p align="center">
   <img src="docs/guide/notebooks.png" alt="A notebook page of reading notes and a drawing of the long way from Troy to Ithaca, redrawn from the Kobo's ink, with its writing read as text below it">
@@ -64,11 +67,11 @@ The Kobo converts handwriting only in Advanced notebooks, and only on request. K
 
 ## Every word, in the sentence you met it
 
-The Kobo remembers the words you look up and forgets where you found them. Kollate goes back to the book for the sentence, pulls a definition from an offline dictionary, and tracks each word from *New* to *Known*. Anki cards follow, and they update without wiping your progress.
+The Kobo remembers the words you look up and forgets where you found them. Word Hoard goes back to the book for the sentence, pulls a definition from an offline dictionary, and tracks each word from *New* to *Known*. Anki cards follow, and they update without wiping your progress.
 
 | | |
 |---|---|
-| ![Vocabulary words, each with its definition and the sentence from the book it was met in](docs/screenshots/vocabulary.png) | ![An Anki card from Kollate: "daemon" with its sentence on the front; the definition, the reader's gloss and the book on the back](docs/screenshots/anki-card.png) |
+| ![Vocabulary words, each with its definition and the sentence from the book it was met in](docs/screenshots/vocabulary.png) | ![An Anki card from Word Hoard: "daemon" with its sentence on the front; the definition, the reader's gloss and the book on the back](docs/screenshots/anki-card.png) |
 | *Thursday: leviathan, ambergris and cetology, each in Melville's own sentence…* | *…and "daemon" as an Anki card, gloss and all.* |
 
 ## KOReader too
@@ -109,7 +112,7 @@ New highlights pile up in the **Inbox**. One key keeps, archives, stars or edits
 **Obsidian:** a note per book and one for your words, resynced after every import. Anything you write below a note's `kollate:user` line survives. **Anki:** word cards, highlights optional. **Files:** JSON, CSV, Readwise CSV.
 
 <p align="center">
-  <img src="docs/screenshots/obsidian.png" width="80%" alt="Obsidian showing Moby-Dick's note from Kollate: the page with the underlined opening line and the handwritten note, then the quote, the note, and the next highlight with its tag">
+  <img src="docs/screenshots/obsidian.png" width="80%" alt="Obsidian showing Moby-Dick's note from Word Hoard: the page with the underlined opening line and the handwritten note, then the quote, the note, and the next highlight with its tag">
 </p>
 <p align="center"><i>Saturday, in Obsidian: Moby-Dick's note, with the page as you marked it.</i></p>
 
@@ -122,20 +125,20 @@ New highlights pile up in the **Inbox**. One key keeps, archives, stars or edits
 
 ## Private, and read-only on your e-reader
 
-- **Read-only on the device.** Kollate copies what it needs and never writes back, so you can eject any time. The Flatpak's sandbox enforces it.
+- **Read-only on the device.** Word Hoard copies what it needs and never writes back, so you can eject any time. The Flatpak's sandbox enforces it.
 - **No network.** Models and extra dictionaries come from links in Preferences, fetched in your browser. The English [Wiktionary](https://www.wiktionary.org/) ships inside, and 16 other languages are on offer.
 - **Re-importing is harmless.** A factory reset or a second Kobo won't create duplicates.
-- **Your edits outrank the device's.** Stars, tags and corrections survive every import, and a highlight deleted on the Kobo lingers in Kollate, flagged.
+- **Your edits outrank the device's.** Stars, tags and corrections survive every import, and a highlight deleted on the Kobo lingers in Word Hoard, flagged.
 
 ## Install
 
-Download from the [latest release](https://github.com/andrew-lawlor/kollate/releases/latest).
+Download from the [latest release](https://github.com/andrew-lawlor/word-hoard/releases/latest).
 
 ### Flatpak (any distribution)
 
 ```sh
-flatpak install --user kollate.flatpak
-flatpak run io.github.andrew_lawlor.Kollate
+flatpak install --user word-hoard.flatpak
+flatpak run io.github.andrew_lawlor.WordHoard
 ```
 
 Flatpak fetches the GNOME 51 runtime itself. The sandbox can read the Kobo but not write to it, and has no network.
@@ -143,24 +146,24 @@ Flatpak fetches the GNOME 51 runtime itself. The sandbox can read the Kobo but n
 ### Debian / Ubuntu (.deb)
 
 ```sh
-sudo apt install ./kollate_0.7.1-1_amd64.deb
+sudo apt install ./word-hoard_0.7.1-1_amd64.deb
 ```
 
-Ships the app, `kollate-cli` and the English Wiktionary. Needs GTK 4.12 and libadwaita 1.5 or newer, as in Debian 13 and Ubuntu 24.04.
+Ships the app, `word-hoard-cli` and the English Wiktionary. Needs GTK 4.12 and libadwaita 1.5 or newer, as in Debian 13 and Ubuntu 24.04.
 
 ### Verifying a download
 
 [GitHub Actions](.github/workflows/release.yml) builds each release from its tagged commit and signs the result. To check a file:
 
 ```sh
-gh attestation verify kollate.flatpak --repo andrew-lawlor/kollate
+gh attestation verify word-hoard.flatpak --repo andrew-lawlor/word-hoard
 ```
 
 ### Building the packages
 
 ```sh
-./scripts/build-deb.sh       # target/debian/kollate_<version>_amd64.deb
-./scripts/build-flatpak.sh   # installs for your user; bundle in target/flatpak/kollate.flatpak
+./scripts/build-deb.sh       # target/debian/word-hoard_<version>_amd64.deb
+./scripts/build-flatpak.sh   # installs for your user; bundle in target/flatpak/word-hoard.flatpak
 ```
 
 The release workflow runs the same scripts. `build-flatpak.sh` needs `org.gnome.Sdk//51`, `org.freedesktop.Sdk.Extension.rust-stable//26.08` and `org.flatpak.Builder` from Flathub. After changing `Cargo.lock`, regenerate `flatpak/cargo-sources.json` with [flatpak-cargo-generator](https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo).
@@ -173,12 +176,12 @@ sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
     cmake libclang-dev glslc spirv-headers libvulkan-dev   # for llama.cpp (handwriting)
 
 ./scripts/fetch-dictionary.sh   # one-time: download (44 MB) and build the dictionary (~180 MB)
-cargo run --release -p kollate
+cargo run --release -p word-hoard
 ```
 
 ## Getting started
 
-1. Start Kollate and plug in the Kobo. Tap *Connect* if it asks.
+1. Start Word Hoard and plug in the Kobo. Tap *Connect* if it asks.
 2. The import runs by itself.
 3. Clear the **Inbox**, browse by book or tag, check **Vocabulary**.
 4. **Export** (`Ctrl+E`) to Obsidian or Anki.
@@ -188,28 +191,28 @@ The **[user guide](docs/guide.md)** covers the rest.
 
 ### Reading your handwriting
 
-Pick a model in *Preferences → Handwriting*: **Qwen3-VL 2B** (2.7 GB, recommended), 4B (3.3 GB) or 8B (6.2 GB, most accurate). Fetch its two files from the links there, then add them with **+**. After each import Kollate transcribes new ink in the background, about half a second a note on a graphics card and 2 to 4 seconds without one. It needs an x86-64 CPU with AVX2, roughly 2013 onward.
+Pick a model in *Preferences → Handwriting*: **Qwen3-VL 2B** (2.7 GB, recommended), 4B (3.3 GB) or 8B (6.2 GB, most accurate). Fetch its two files from the links there, then add them with **+**. After each import Word Hoard transcribes new ink in the background, about half a second a note on a graphics card and 2 to 4 seconds without one. It needs an x86-64 CPU with AVX2, roughly 2013 onward.
 
 <p align="center">
-  <img src="docs/screenshots/handwriting-models.png" width="80%" alt="Character accuracy on 45 pages of handwriting. Split into notes, as Kollate does: 2B 93% at 0.5 seconds a page, 4B 91% at 0.7, 8B 94% at 0.9. Whole page in one prompt: 2B 55% at 2.8 seconds, 4B 84% at 3.5, 8B 84% at 5.8.">
+  <img src="docs/screenshots/handwriting-models.png" width="80%" alt="Character accuracy on 45 pages of handwriting. Split into notes, as Word Hoard does: 2B 93% at 0.5 seconds a page, 4B 91% at 0.7, 8B 94% at 0.9. Whole page in one prompt: 2B 55% at 2.8 seconds, 4B 84% at 3.5, 8B 84% at 5.8.">
 </p>
 <p align="center"><i>Why the 2B: handed small jobs, it nearly matches the 8B in a fraction of the time.</i></p>
 
-From a terminal: `kollate-cli models` lists the models, `kollate-cli models add FILES…` adds them, and `kollate-cli transcribe` reads what's waiting.
+From a terminal: `word-hoard-cli models` lists the models, `word-hoard-cli models add FILES…` adds them, and `word-hoard-cli transcribe` reads what's waiting.
 
-Your library lives in `~/.local/share/kollate/`, or `~/.var/app/io.github.andrew_lawlor.Kollate/data/kollate/` for the Flatpak.
+Your library lives in `~/.local/share/word-hoard/`, or `~/.var/app/io.github.andrew_lawlor.WordHoard/data/word-hoard/` for the Flatpak.
 
 ### Command line
 
 ```sh
-kollate-cli inspect /media/$USER/KOBOeReader          # what's on the Kobo (read-only)
-kollate-cli import  /media/$USER/KOBOeReader --dry-run
-kollate-cli import  /media/$USER/KOBOeReader
-kollate-cli library                                    # what's in your library
-kollate-cli contexts /media/$USER/KOBOeReader          # context sentences for vocab words
-kollate-cli export obsidian ~/Vault/Books
-kollate-cli export anki Kollate.apkg --highlights
-kollate-cli dict build-stardict ~/dicts/foo.ifo foo.db # convert a dictionary
+word-hoard-cli inspect /media/$USER/KOBOeReader          # what's on the Kobo (read-only)
+word-hoard-cli import  /media/$USER/KOBOeReader --dry-run
+word-hoard-cli import  /media/$USER/KOBOeReader
+word-hoard-cli library                                    # what's in your library
+word-hoard-cli contexts /media/$USER/KOBOeReader          # context sentences for vocab words
+word-hoard-cli export obsidian ~/Vault/Books
+word-hoard-cli export anki Word Hoard.apkg --highlights
+word-hoard-cli dict build-stardict ~/dicts/foo.ifo foo.db # convert a dictionary
 ```
 
 ## Compatibility
@@ -221,7 +224,7 @@ kollate-cli dict build-stardict ~/dicts/foo.ifo foo.db # convert a dictionary
 | Clara Colour | 4.42 | 176 | none |
 | Clara 2E | 4.38 | 174 | none |
 
-Sideloaded and store books both import; context sentences need DRM-free files. Other Kobos should work. Kollate flags a database version it hasn't seen, and a [report](https://github.com/andrew-lawlor/kollate/issues/new?template=compatibility.yml) helps even when nothing broke.
+Sideloaded and store books both import; context sentences need DRM-free files. Other Kobos should work. Word Hoard flags a database version it hasn't seen, and a [report](https://github.com/andrew-lawlor/word-hoard/issues/new?template=compatibility.yml) helps even when nothing broke.
 
 **KOReader** 2026.07 or newer. Handwriting needs our Pencil plugin; the original's ink isn't read. KOReader on Kindle or PocketBook isn't detected yet.
 
@@ -229,9 +232,9 @@ Sideloaded and store books both import; context sentences need DRM-free files. O
 
 ```
 crates/
-  kollate-core/   Kobo and KOReader readers, library (SQLite), import/dedup, dictionaries, EPUB context, exports
-  kollate-cli/    command-line tool
-  kollate/        GTK 4 / libadwaita app
+  hoard-core/   Kobo and KOReader readers, library (SQLite), import/dedup, dictionaries, EPUB context, exports
+  word-hoard-cli/    command-line tool
+  word-hoard/        GTK 4 / libadwaita app
 tests/fixtures/   a trimmed Kobo database used by the tests
 SPEC.md           design notes, data model and what was verified on a real device
 ```
@@ -243,10 +246,10 @@ cargo clippy --all-targets
 
 ## License
 
-Kollate is free software under the **GNU General Public License v3.0 or later**; see [LICENSE](LICENSE).
+Word Hoard is free software under the **GNU General Public License v3.0 or later**; see [LICENSE](LICENSE).
 
-Definitions come from **[Wiktionary](https://www.wiktionary.org/)** © Wiktionary contributors, compiled by [reader.dict](https://www.reader-dict.com/), under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The bundled dictionary is distributed under the same licence; see [THIRD-PARTY.md](crates/kollate/data/THIRD-PARTY.md). Kollate isn't affiliated with reader.dict or the Wikimedia Foundation.
+Definitions come from **[Wiktionary](https://www.wiktionary.org/)** © Wiktionary contributors, compiled by [reader.dict](https://www.reader-dict.com/), under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The bundled dictionary is distributed under the same licence; see [THIRD-PARTY.md](crates/word-hoard/data/THIRD-PARTY.md). Word Hoard isn't affiliated with reader.dict or the Wikimedia Foundation.
 
 The books in the screenshots are **[Standard Ebooks](https://standardebooks.org)** editions, dedicated to the public domain ([CC0](https://creativecommons.org/publicdomain/zero/1.0/)). Thanks to its volunteers.
 
-Kollate isn't affiliated with or endorsed by Rakuten Kobo or the KOReader project. "Kobo" is a trademark of Rakuten Kobo Inc.
+Word Hoard isn't affiliated with or endorsed by Rakuten Kobo or the KOReader project. "Kobo" is a trademark of Rakuten Kobo Inc.

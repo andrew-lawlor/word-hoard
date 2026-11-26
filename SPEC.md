@@ -6,7 +6,7 @@ Exported Nov 26, 2026 from the living doc: https://claude.ai/artifact/ErKeqGr3GQ
 
 Word Hoard is a GNOME-native ebook library that treats what you *read and marked* as first-class, not just the files. Calibre is a universal converter with a library attached; Word Hoard is a reading-life manager with a library attached.
 
-Word Hoard supersedes [Kollate](https://github.com/andrew-lawlor/kollate), the same author's GTK app for e-reader annotations. Kollate's device code, verified on real Kobos, is ported rather than rewritten, and 1.0 ships only when Word Hoard does everything Kollate does (see *Kollate* below).
+Word Hoard grew out of Kollate, the same author's GTK app for e-reader annotations: as of 0.8 this repository *is* Kollate, renamed, and the library, sync and agent features below are added to it. Kollate's design notes, with device details verified on real Kobos, are in [docs/design/kollate-notes.md](docs/design/kollate-notes.md).
 
 **Principles**
 
@@ -14,6 +14,7 @@ Word Hoard supersedes [Kollate](https://github.com/andrew-lawlor/kollate), the s
 - **Annotations are data, not exhaust.** Every highlight and note is pulled off the device, anchored to its book, deduplicated and kept forever.
 - **Curation lives beside the books.** Collections, notes and syntheses are stored in the same library, linked to the passages they cite.
 - **Agents propose, humans dispose.** Every AI change is a reviewable diff; nothing writes to metadata, files or devices without approval.
+- **The device is written to on purpose only.** Exports, temporary files, the library and copied images never land on an e-reader. The one exception is sending books (M3): a device writer that exists only while applying a sync you approved, backs up `KoboReader.sqlite` first, and can only copy or delete book files and change shelves, read status and series.
 - **Local first.** Works fully offline, including the assistant on a local model. Cloud providers are opt-in with your own API key, and any MCP client can connect too.
 - **Plain, durable storage.** Books stay as normal files in a readable folder tree; the database is SQLite; exports are Markdown.
 - **Do fewer things well.** EPUB/KEPUB first. Conversion and reading are delegated (Foliate, KOReader, pandoc) rather than reimplemented.
@@ -282,28 +283,28 @@ The app should feel like a GNOME Core app: one window, adaptive from phone width
 
 ## Kollate
 
-Everything Kollate does moves into Word Hoard, mostly by porting its `kollate-core` code. Ported so far (M0): the Kobo database reader, chapter resolution, text cleanup, date parsing, calibre path parsing, model names and the never-write-to-the-Kobo guard, plus Kollate's real Libra Colour database as a test fixture.
+As of 0.8 this repository is Kollate renamed: Kollate's code base (GTK app, library database, Kobo and KOReader import, handwriting, vocabulary, exports) is Word Hoard's starting point, and the spec's crates are reached by splitting it up as features need it, not in one rewrite.
 
-| Kollate feature | Word Hoard home | Milestone |
+| Now (0.8) | Spec crate | When it splits out |
 | --- | --- | --- |
-| Kobo highlights, notes, dogears | `hoard-kobo` | M0 (done) |
-| Stylus markups: ink SVG + page JPG, crop from `ExtraAnnotationData` | `hoard-kobo` assets | M1 |
-| Kobo notebooks (`.nebo`, BINK ink) | `hoard-kobo` notebooks | M1 |
-| KOReader highlights, notes, vocabulary, Pencil plugin ink | new `hoard-koreader` crate | M1 |
-| Dedupe across devices and factory resets (fingerprints, `annotation_source`) | `hoard-core` library | M1 |
-| Inbox / kept / archived triage, stars, tags, edit history | curation layer | M4 |
-| Pen marks: `*`, `?`, `#tag`, circled words as glosses | curation layer | M4 |
-| Vocabulary: sentence from the book, offline dictionaries, Anki export | new `hoard-vocab` crate | M4 |
-| Quote cards | curation layer | M4 |
-| Handwriting read as text (llama.cpp, Qwen3-VL) | `hoard-agent` local vision provider | M5 |
-| Obsidian, CSV, JSON, Anki exports | `hoard-core` export | M1 to M4 |
-| Import an existing Kollate `library.db` | migration | M6 |
+| `hoard-core/src/kobo` | `hoard-kobo` | M3 (sending books) |
+| `hoard-core/src/koreader` | `hoard-koreader` | when a second device crate exists |
+| `hoard-core/src/store`, `export`, `normalize` | `hoard-core` | stays |
+| `hoard-core/src/markup` | `hoard-ink` | M5 |
+| `hoard-core/src/dict` and vocabulary | `hoard-vocab` | M4 |
+| `hoard-transcribe` | local vision provider in `hoard-agent` | M5 |
+| `word-hoard` (GTK app, binary `word-hoard`) | `word-hoard` | stays |
+| `word-hoard-cli` (binary `word-hoard-cli`) | `word-hoard-cli` | stays |
+
+From the standalone M0 CLI (kept in git history), three things are still to port into `hoard-core/src/kobo`: reading databases with missing columns as empty instead of failing, finding a Kobo mounted anywhere via `/proc/self/mounts`, and the schema-only `report` command.
+
+Names kept from Kollate for compatibility: Anki note types, decks and GUID seeds (`Kollate Vocab`, `kollate:vocab:…`), the Obsidian `kollate_id` and `%% kollate:user` markers and `kollate-markup-` attachments, and the `kollate-backup` format. Renaming them would duplicate cards or orphan notes already exported.
 
 ## Roadmap
 
 Build the annotation path end to end first; it is the feature nobody else does well and it proves the Kobo layer.
 
-1. **M0 — Kobo annotation CLI.** `hoard-kobo` + `hoard-core` + a CLI that snapshots a plugged-in Kobo and exports every highlight to Markdown. Gate: correct output on 3 real devices / firmware versions, store and sideloaded books. Status: built; reader ported from Kollate, which was verified on a Libra Colour, Clara 2E and Elipsa 2E; Word Hoard itself run on a Libra Colour (firmware 4.46).
+1. **M0 — Kobo annotation CLI.** Done, and superseded by the merge with Kollate (0.8), whose app and CLI already import Kobo and KOReader annotations, verified on a Libra Colour, Clara 2E, Clara Colour and Elipsa 2E.
 2. **M1 — Library core.** SQLite schema, EPUB metadata read/write, Calibre import, FTS search, Kollate's dedupe and merge rules, stylus markups, notebooks and KOReader. Gate: imports a 2k-book Calibre library in under 60 s with no lost metadata.
 3. **M2 — GTK shell.** Library grid/list, book detail, annotations views, device pane with read-only sync. Gate: usable daily as a Kobo highlight browser.
 4. **M3 — Sending books.** KEPUB conversion, send/remove, shelves sync, DB backup and writes. Gate: round-trips 500 books with zero firmware re-import loops.

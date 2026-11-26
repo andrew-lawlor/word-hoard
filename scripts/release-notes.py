@@ -24,7 +24,7 @@ cargo = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]
 if cargo != version:
     fail(f"Cargo.toml says {cargo}, not {version}")
 
-metainfo = ET.parse(root / "crates/kollate/data/io.github.andrew_lawlor.Kollate.metainfo.xml")
+metainfo = ET.parse(root / "crates/word-hoard/data/io.github.andrew_lawlor.WordHoard.metainfo.xml")
 release = metainfo.find("releases/release")
 if release is None or release.get("version") != version:
     fail(f"the newest metainfo release isn't {version}")
@@ -41,7 +41,7 @@ for el in release.find("description"):
     elif el.tag == "ul":
         notes += [f"- {text(li)}" for li in el.findall("li")] + [""]
 
-deb = f"kollate_{version}-1_amd64.deb"
+deb = f"word-hoard_{version}-1_amd64.deb"
 print(f"""## What's new
 
 {chr(10).join(notes).strip()}
@@ -50,10 +50,10 @@ print(f"""## What's new
 
 | File | For |
 |---|---|
-| `kollate.flatpak` | Any distribution: `flatpak install --user kollate.flatpak`. Read-only access to your Kobo, no network. |
+| `word-hoard.flatpak` | Any distribution: `flatpak install --user word-hoard.flatpak`. Read-only access to your Kobo, no network. |
 | `{deb}` | Debian 13 or Ubuntu 24.04 and newer: `sudo apt install ./{deb}` |
 | `SHA256SUMS` | Checksums |
 
 Upgrading keeps your library.
 
-Built by [GitHub Actions](https://github.com/andrew-lawlor/kollate/actions) from the tagged commit. To check a download came from this repository: `gh attestation verify <file> --repo andrew-lawlor/kollate`.""")
+Built by [GitHub Actions](https://github.com/andrew-lawlor/word-hoard/actions) from the tagged commit. To check a download came from this repository: `gh attestation verify <file> --repo andrew-lawlor/word-hoard`.""")

@@ -863,6 +863,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hoard-core"
+version = "0.8.0"
+dependencies = [
+ "blake3",
+ "bzip2-rs",
+ "chrono",
+ "csv",
+ "flate2",
+ "image",
+ "quick-xml",
+ "resvg",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "thiserror",
+ "unicode-normalization",
+ "zip",
+]
+
+[[package]]
+name = "hoard-transcribe"
+version = "0.8.0"
+dependencies = [
+ "blake3",
+ "hoard-core",
+ "image",
+ "llama-cpp-2",
+ "serde_json",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -957,64 +990,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "kollate"
-version = "0.7.1"
-dependencies = [
- "cairo-rs",
- "chrono",
- "gtk4",
- "image",
- "kollate-core",
- "kollate-transcribe",
- "libadwaita",
- "pangocairo",
-]
-
-[[package]]
-name = "kollate-cli"
-version = "0.7.1"
-dependencies = [
- "anyhow",
- "clap",
- "kollate-core",
- "kollate-transcribe",
- "serde_json",
-]
-
-[[package]]
-name = "kollate-core"
-version = "0.7.1"
-dependencies = [
- "blake3",
- "bzip2-rs",
- "chrono",
- "csv",
- "flate2",
- "image",
- "quick-xml",
- "resvg",
- "rusqlite",
- "serde",
- "serde_json",
- "sha1_smol",
- "tempfile",
- "thiserror",
- "unicode-normalization",
- "zip",
-]
-
-[[package]]
-name = "kollate-transcribe"
-version = "0.7.1"
-dependencies = [
- "blake3",
- "image",
- "kollate-core",
- "llama-cpp-2",
- "serde_json",
 ]
 
 [[package]]
@@ -2037,6 +2012,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "word-hoard"
+version = "0.8.0"
+dependencies = [
+ "cairo-rs",
+ "chrono",
+ "gtk4",
+ "hoard-core",
+ "hoard-transcribe",
+ "image",
+ "libadwaita",
+ "pangocairo",
+]
+
+[[package]]
+name = "word-hoard-cli"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hoard-core",
+ "hoard-transcribe",
+ "serde_json",
 ]
 
 [[package]]

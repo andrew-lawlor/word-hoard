@@ -16,7 +16,7 @@ mkdir -p "$OUT"
 python3 - "$TAG" "$COMMIT" "$OUT" <<'PY'
 import sys
 tag, commit, out = sys.argv[1:]
-src = open("flatpak/io.github.andrew_lawlor.Kollate.yml").read()
+src = open("flatpak/io.github.andrew_lawlor.WordHoard.yml").read()
 local = """      - type: dir
         path: ..
         skip:
@@ -28,11 +28,11 @@ local = """      - type: dir
 """
 assert local in src, "the manifest's local source changed; update this script"
 git = f"""      - type: git
-        url: https://github.com/andrew-lawlor/kollate.git
+        url: https://github.com/andrew-lawlor/word-hoard.git
         tag: {tag}
         commit: {commit}
 """
-open(f"{out}/io.github.andrew_lawlor.Kollate.yml", "w").write(src.replace(local, git))
+open(f"{out}/io.github.andrew_lawlor.WordHoard.yml", "w").write(src.replace(local, git))
 PY
 cp flatpak/cargo-sources.json "$OUT/"
 printf '{\n  "only-arches": ["x86_64"]\n}\n' > "$OUT/flathub.json"

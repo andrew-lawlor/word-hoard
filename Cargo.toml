@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/kollate-core", "crates/kollate-transcribe", "crates/kollate-cli", "crates/kollate"]
+members = ["crates/hoard-core", "crates/hoard-transcribe", "crates/word-hoard-cli", "crates/word-hoard"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 

@@ -1,0 +1,692 @@
+//! The local library: Word Hoard's own SQLite database and the source of truth.
+//! Nothing here ever touches the device.
+
+mod markup;
+mod pen;
+mod query;
+mod schema;
+mod vocab;
+
+pub use markup::{MarkupJob, page_words_path};
+pub use pen::GLOSSES_SETTING;
+pub(crate) use pen::apply_pen_marks;
+pub use query::{AnnotationFilter, DeviceDeletePolicy, SidebarCounts, Tag, View, VocabStatus};
+pub use vocab::{Sighting, Vocab, VocabDetail};
+
+use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Utc};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
+
+use crate::Result;
+use crate::kobo::qvariant::Rect;
+
+pub struct Library {
+    pub(crate) conn: Connection,
+    /// Folder holding the database; assets are stored beside it.
+    dir: Option<PathBuf>,
+}
+
+/// `$XDG_DATA_HOME`, defaulting to `~/.local/share`.
+fn data_home() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
+        })
+}
+
+/// `$XDG_DATA_HOME/word-hoard/library.db`, defaulting to `~/.local/share`.
+pub fn default_library_path() -> PathBuf {
+    data_home().join("word-hoard/library.db")
+}
+
+/// Word Hoard was called Kollate up to 0.7, and kept its library in
+/// `$XDG_DATA_HOME/kollate`. The first time Word Hoard runs, that folder
+/// becomes Word Hoard's, unless Word Hoard already has one. Returns the old
+/// folder when it was moved.
+pub fn migrate_from_kollate() -> Result<Option<PathBuf>> {
+    let home = data_home();
+    migrate_library_dir(&home.join("kollate"), &home.join("word-hoard"))
+}
+
+/// Moves a library folder and updates the absolute paths of the covers and
+/// markup images recorded in it, which live inside the folder.
+fn migrate_library_dir(old: &Path, new: &Path) -> Result<Option<PathBuf>> {
+    if new.exists() || !old.join("library.db").is_file() {
+        return Ok(None);
+    }
+    std::fs::rename(old, new)?;
+    let conn = Connection::open(new.join("library.db"))?;
+    let from = format!("{}/", old.display());
+    let to = format!("{}/", new.display());
+    for (table, column) in [
+        ("book", "cover_path"),
+        ("annotation", "markup_svg_path"),
+        ("annotation", "markup_jpg_path"),
+    ] {
+        conn.execute(
+            &format!(
+                "UPDATE {table} SET {column} = ?2 || substr({column}, length(?1) + 1)
+                 WHERE substr({column}, 1, length(?1)) = ?1"
+            ),
+            params![from, to],
+        )?;
+    }
+    Ok(Some(old.to_path_buf()))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Inbox,
+    Kept,
+    Archived,
+    Trashed,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbox => "inbox",
+            Self::Kept => "kept",
+            Self::Archived => "archived",
+            Self::Trashed => "trashed",
+        }
+    }
+
+    pub(crate) fn parse(s: &str) -> Self {
+        match s {
+            "kept" => Self::Kept,
+            "archived" => Self::Archived,
+            "trashed" => Self::Trashed,
+            _ => Self::Inbox,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Annotation {
+    pub id: i64,
+    pub book_id: i64,
+    pub kind: String,
+    pub device_text: Option<String>,
+    pub device_note: Option<String>,
+    pub user_text: Option<String>,
+    pub user_note: Option<String>,
+    /// Highlight colour by name (see [`crate::color`]).
+    pub color: String,
+    pub chapter_title: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub starred: bool,
+    pub status: Status,
+    pub device_changed_at: Option<DateTime<Utc>>,
+    pub removed_on_device_at: Option<DateTime<Utc>>,
+    pub book_title: String,
+    pub book_author: Option<String>,
+    pub tags: Vec<String>,
+    /// A stylus markup's copied ink (SVG) and page (JPG). See
+    /// [`Annotation::markup_page`].
+    pub markup_svg: Option<PathBuf>,
+    pub markup_jpg: Option<PathBuf>,
+    /// The part of the page worth showing. See [`Annotation::markup_view`].
+    #[serde(skip)]
+    pub markup_crop: Option<Rect>,
+    /// A markup transcribed on this computer: the printed text it marks and
+    /// the handwriting. Shown when neither the Kobo nor the user supplied one.
+    pub ink_text: Option<String>,
+    pub ink_note: Option<String>,
+    /// The model that read the handwriting.
+    pub ink_source: Option<String>,
+    /// Made in KOReader rather than the Kobo's own reader (SPEC §8e).
+    pub from_koreader: bool,
+}
+
+impl Annotation {
+    /// A stylus markup's whole page with the ink on it (see
+    /// [`markup_page`](crate::kobo::assets::markup_page)).
+    pub fn markup_page(&self) -> Option<PathBuf> {
+        self.markup_image(None)
+    }
+
+    /// Like [`markup_page`](Self::markup_page), cut to the ink and the text
+    /// it marks when that's known.
+    pub fn markup_view(&self) -> Option<PathBuf> {
+        self.markup_image(self.markup_crop)
+    }
+
+    fn markup_image(&self, crop: Option<Rect>) -> Option<PathBuf> {
+        crate::kobo::assets::markup_page(
+            self.markup_svg.as_deref(),
+            self.markup_jpg.as_deref(),
+            crop,
+        )
+        .unwrap_or_else(|err| {
+            eprintln!("markup {}: {err}", self.id);
+            self.markup_jpg.clone()
+        })
+    }
+
+    /// The text to display: the user's correction, else the original.
+    pub fn text(&self) -> Option<&str> {
+        self.user_text.as_deref().or(self.original_text())
+    }
+
+    /// The note to display. A user override of `""` hides the original.
+    pub fn note(&self) -> Option<&str> {
+        self.user_note
+            .as_deref()
+            .or(self.original_note())
+            .filter(|n| !n.is_empty())
+    }
+
+    /// The Kobo's text, or for a markup, its transcription.
+    pub fn original_text(&self) -> Option<&str> {
+        self.device_text.as_deref().or(self.ink_text.as_deref())
+    }
+
+    /// The Kobo's note, or for a markup, its transcribed handwriting.
+    pub fn original_note(&self) -> Option<&str> {
+        self.device_note.as_deref().or(self.ink_note.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Book {
+    pub id: i64,
+    pub title: String,
+    pub author: Option<String>,
+    pub annotation_count: i64,
+    pub vocab_count: i64,
+    pub cover: Option<PathBuf>,
+    pub percent_read: Option<i64>,
+    pub last_read_at: Option<DateTime<Utc>>,
+    pub isbn: Option<String>,
+    pub publisher: Option<String>,
+    pub series: Option<String>,
+    pub series_number: Option<String>,
+    /// Newest highlight (Inbox or kept) or word lookup in this book.
+    pub last_activity: Option<DateTime<Utc>>,
+}
+
+/// Order of the Books page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum BookSort {
+    /// Most recently annotated first.
+    #[default]
+    Recent,
+    Title,
+    Author,
+}
+
+impl BookSort {
+    pub const ALL: [Self; 3] = [Self::Recent, Self::Title, Self::Author];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Title => "title",
+            Self::Author => "author",
+        }
+    }
+
+    pub fn parse(s: Option<&str>) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|v| Some(v.as_str()) == s)
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LibraryCounts {
+    pub books: i64,
+    pub annotations: i64,
+    pub vocab: i64,
+    pub sightings: i64,
+    pub removed_on_device: i64,
+}
+
+pub(crate) const ANNOTATION_SELECT: &str = "SELECT a.id, a.book_id, a.kind, a.device_text, a.device_note,
+     a.user_text, a.user_note, a.color, a.chapter_title, a.created_at, a.starred, a.status,
+     a.device_changed_at, a.removed_on_device_at, coalesce(b.user_title, b.title),
+     coalesce(b.user_author, b.author),
+     (SELECT group_concat(name, char(31)) FROM (SELECT t.name FROM annotation_tag x JOIN tag t ON t.id = x.tag_id
+      WHERE x.annotation_id = a.id ORDER BY t.name COLLATE NOCASE)),
+     a.markup_svg_path, a.markup_jpg_path, a.markup_crop, a.ink_text, a.ink_note, a.ink_source,
+     EXISTS (SELECT 1 FROM annotation_source x WHERE x.annotation_id = a.id AND x.bookmark_id LIKE 'koreader:%')
+     FROM annotation a JOIN book b ON b.id = a.book_id";
+
+/// A crop stored as "left,top,right,bottom".
+fn parse_rect(s: &str) -> Option<Rect> {
+    let n: Vec<i32> = s.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    match n[..] {
+        [left, top, right, bottom] => Some(Rect {
+            left,
+            top,
+            right,
+            bottom,
+        }),
+        _ => None,
+    }
+}
+
+pub(crate) fn annotation_from_row(r: &rusqlite::Row) -> rusqlite::Result<Annotation> {
+    Ok(Annotation {
+        id: r.get(0)?,
+        book_id: r.get(1)?,
+        kind: r.get(2)?,
+        device_text: r.get(3)?,
+        device_note: r.get(4)?,
+        user_text: r.get(5)?,
+        user_note: r.get(6)?,
+        color: r.get(7)?,
+        chapter_title: r.get(8)?,
+        created_at: r.get(9)?,
+        starred: r.get(10)?,
+        status: Status::parse(&r.get::<_, String>(11)?),
+        device_changed_at: r.get(12)?,
+        removed_on_device_at: r.get(13)?,
+        book_title: r.get(14)?,
+        book_author: r.get(15)?,
+        tags: r
+            .get::<_, Option<String>>(16)?
+            .map(|s| s.split('\u{1f}').map(str::to_owned).collect())
+            .unwrap_or_default(),
+        markup_svg: r.get::<_, Option<String>>(17)?.map(PathBuf::from),
+        markup_jpg: r.get::<_, Option<String>>(18)?.map(PathBuf::from),
+        markup_crop: r
+            .get::<_, Option<String>>(19)?
+            .as_deref()
+            .and_then(parse_rect),
+        ink_text: r.get(20)?,
+        ink_note: r.get(21)?,
+        ink_source: r.get(22)?,
+        from_koreader: r.get(23)?,
+    })
+}
+
+impl Library {
+    pub fn open(path: &Path) -> Result<Self> {
+        crate::kobo::ensure_not_on_kobo(path)?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Self::init(
+            Connection::open(path)?,
+            path.parent().map(Path::to_path_buf),
+        )
+    }
+
+    pub fn open_in_memory() -> Result<Self> {
+        Self::init(Connection::open_in_memory()?, None)
+    }
+
+    /// Where copied covers and markup images go (`None` for in-memory libraries).
+    pub fn assets_dir(&self) -> Option<PathBuf> {
+        self.dir.clone()
+    }
+
+    fn init(conn: Connection, dir: Option<PathBuf>) -> Result<Self> {
+        conn.pragma_update(None, "journal_mode", "wal")?;
+        // Foreign keys are off while migrating, as SQLite advises for
+        // rebuilding a table: dropping the old one would otherwise cascade.
+        conn.pragma_update(None, "foreign_keys", false)?;
+        let version: usize = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        for (i, sql) in schema::MIGRATIONS.iter().enumerate().skip(version) {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(sql)?;
+            let broken: Option<String> = tx
+                .query_row("PRAGMA foreign_key_check", [], |r| r.get(0))
+                .optional()?;
+            if let Some(table) = broken {
+                return Err(std::io::Error::other(format!(
+                    "library upgrade {} left broken references in {table}",
+                    i + 1
+                ))
+                .into());
+            }
+            tx.pragma_update(None, "user_version", i + 1)?;
+            tx.commit()?;
+        }
+        conn.pragma_update(None, "foreign_keys", true)?;
+        let lib = Self { conn, dir };
+        lib.backfill_position_keys()?;
+        Ok(lib)
+    }
+
+    fn backfill_position_keys(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, start_path, start_offset, chapter_progress FROM annotation WHERE position_key IS NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, path, offset, progress) in rows {
+            self.conn.execute(
+                "UPDATE annotation SET position_key = ?2 WHERE id = ?1",
+                params![id, crate::kobo::position_key(&path, offset, progress)],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn counts(&self) -> Result<LibraryCounts> {
+        Ok(self.conn.query_row(
+            "SELECT (SELECT count(*) FROM book), (SELECT count(*) FROM annotation),
+                    (SELECT count(*) FROM vocab), (SELECT count(*) FROM vocab_sighting),
+                    (SELECT count(*) FROM annotation WHERE removed_on_device_at IS NOT NULL)",
+            [],
+            |r| {
+                Ok(LibraryCounts {
+                    books: r.get(0)?,
+                    annotations: r.get(1)?,
+                    vocab: r.get(2)?,
+                    sightings: r.get(3)?,
+                    removed_on_device: r.get(4)?,
+                })
+            },
+        )?)
+    }
+
+    /// Every book in the library, by title.
+    pub fn books(&self) -> Result<Vec<Book>> {
+        self.query_books(None, false, None, BookSort::Title)
+    }
+
+    pub fn book(&self, id: i64) -> Result<Option<Book>> {
+        Ok(self
+            .query_books(Some(id), false, None, BookSort::Title)?
+            .into_iter()
+            .next())
+    }
+
+    /// Books worth showing: those with a highlight in the Inbox or kept, or
+    /// a word that isn't Ignored. Books whose highlights are all archived or
+    /// trashed are left out. `search` matches title or author.
+    pub fn shelf(&self, sort: BookSort, search: Option<&str>) -> Result<Vec<Book>> {
+        self.query_books(None, true, search, sort)
+    }
+
+    fn query_books(
+        &self,
+        id: Option<i64>,
+        active_only: bool,
+        search: Option<&str>,
+        sort: BookSort,
+    ) -> Result<Vec<Book>> {
+        let pattern = search
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(query::like_pattern);
+        let order = match sort {
+            BookSort::Recent => "last_activity IS NULL, last_activity DESC, title COLLATE NOCASE",
+            BookSort::Title => "title COLLATE NOCASE",
+            BookSort::Author => "author IS NULL, author COLLATE NOCASE, title COLLATE NOCASE",
+        };
+        let mut stmt = self.conn.prepare(&format!(
+            "WITH stats AS (
+                SELECT b.id,
+                    (SELECT count(*) FROM annotation a WHERE a.book_id = b.id AND a.status IN ('inbox', 'kept'))
+                        AS annotations,
+                    (SELECT count(DISTINCT s.vocab_id) FROM vocab_sighting s JOIN vocab v ON v.id = s.vocab_id
+                     WHERE s.book_id = b.id AND v.status != 'ignored') AS words,
+                    nullif(max(
+                        coalesce((SELECT max(a.created_at) FROM annotation a
+                                  WHERE a.book_id = b.id AND a.status IN ('inbox', 'kept')), ''),
+                        coalesce((SELECT max(s.looked_up_at) FROM vocab_sighting s JOIN vocab v ON v.id = s.vocab_id
+                                  WHERE s.book_id = b.id AND v.status != 'ignored'), '')
+                    ), '') AS last_activity
+                FROM book b
+            )
+            SELECT b.id, coalesce(b.user_title, b.title) AS title, coalesce(b.user_author, b.author) AS author,
+                   st.annotations, st.words, b.cover_path, b.percent_read, b.last_read_at, b.isbn, b.publisher,
+                   b.series, b.series_number, st.last_activity
+            FROM book b JOIN stats st ON st.id = b.id
+            WHERE NOT b.hidden
+              AND (?1 IS NULL OR b.id = ?1)
+              AND (NOT ?2 OR st.annotations > 0 OR st.words > 0)
+              AND (?3 IS NULL OR coalesce(b.user_title, b.title) LIKE ?3 ESCAPE '\\'
+                   OR coalesce(b.user_author, b.author, '') LIKE ?3 ESCAPE '\\')
+            ORDER BY {order}"
+        ))?;
+        let books = stmt.query_map(params![id, active_only, pattern], |r| {
+            Ok(Book {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                author: r.get(2)?,
+                annotation_count: r.get(3)?,
+                vocab_count: r.get(4)?,
+                cover: r.get::<_, Option<String>>(5)?.map(PathBuf::from),
+                percent_read: r.get(6)?,
+                last_read_at: r.get(7)?,
+                isbn: r.get(8)?,
+                publisher: r.get(9)?,
+                series: r.get(10)?,
+                series_number: r.get(11)?,
+                last_activity: r.get(12)?,
+            })
+        })?;
+        Ok(books.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Records where a device's covers and markup images were copied to.
+    pub fn attach_assets(
+        &self,
+        device: &crate::kobo::DeviceInfo,
+        assets: &crate::kobo::assets::CopiedAssets,
+    ) -> Result<()> {
+        let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
+        for (volume_id, cover) in &assets.covers {
+            self.conn.execute(
+                "UPDATE book SET cover_path = ?3 WHERE id = (
+                    SELECT s.book_id FROM book_source s JOIN device d ON d.id = s.device_id
+                    WHERE d.serial = ?1 AND s.volume_id = ?2)",
+                params![device.serial, volume_id, cover.to_string_lossy()],
+            )?;
+        }
+        for m in &assets.markups {
+            let crop = m
+                .crop
+                .map(|c| format!("{},{},{},{}", c.left, c.top, c.right, c.bottom));
+            self.conn.execute(
+                "UPDATE annotation SET markup_svg_path = ?2, markup_jpg_path = ?3, markup_crop = ?4
+                 WHERE id = (SELECT annotation_id FROM annotation_source WHERE bookmark_id = ?1)",
+                params![m.bookmark_id, path(&m.svg), path(&m.jpg), crop],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM setting WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO setting (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// The annotation a Kobo bookmark (or notebook page) was imported as.
+    pub fn annotation_for_bookmark(&self, bookmark_id: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT annotation_id FROM annotation_source WHERE bookmark_id = ?1",
+                [bookmark_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Whether any annotation came from KOReader: then cards name the
+    /// reader each came from (SPEC §8e).
+    pub fn has_koreader(&self) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM annotation_source
+                            WHERE bookmark_id >= 'koreader:' AND bookmark_id < 'koreader;')",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn annotation(&self, id: i64) -> Result<Option<Annotation>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("{ANNOTATION_SELECT} WHERE a.id = ?1"),
+                [id],
+                annotation_from_row,
+            )
+            .optional()?)
+    }
+
+    /// Annotations of a book in reading order.
+    pub fn annotations_for_book(&self, book_id: i64) -> Result<Vec<Annotation>> {
+        self.query_annotations(&AnnotationFilter {
+            view: View::Book(book_id),
+            ..Default::default()
+        })
+    }
+
+    pub fn annotation_id_for_bookmark(&self, bookmark_id: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT annotation_id FROM annotation_source WHERE bookmark_id = ?1",
+                [bookmark_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    fn record_revision(
+        &self,
+        id: i64,
+        field: &str,
+        old: Option<&str>,
+        new: Option<&str>,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO annotation_revision (annotation_id, field, old_value, new_value, source, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, field, old, new, source, Utc::now()],
+        )?;
+        Ok(())
+    }
+
+    /// Sets (or with `None`, clears) the user's version of the note. The
+    /// device's note is kept and future device changes never overwrite it.
+    pub fn set_user_note(&self, id: i64, note: Option<&str>) -> Result<()> {
+        self.set_user_field(id, "user_note", note)
+    }
+
+    /// Sets (or clears) a corrected highlight text.
+    pub fn set_user_text(&self, id: i64, text: Option<&str>) -> Result<()> {
+        self.set_user_field(id, "user_text", text)
+    }
+
+    fn set_user_field(&self, id: i64, column: &str, value: Option<&str>) -> Result<()> {
+        let old: Option<String> = self.conn.query_row(
+            &format!("SELECT {column} FROM annotation WHERE id = ?1"),
+            [id],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            &format!("UPDATE annotation SET {column} = ?2, updated_at = ?3 WHERE id = ?1"),
+            params![id, value, Utc::now()],
+        )?;
+        self.record_revision(id, column, old.as_deref(), value, "user")
+    }
+
+    /// Sets the status. A manual change also forgets any status saved when
+    /// the highlight was auto-trashed, so a later re-import won't undo it.
+    pub fn set_status(&self, id: i64, status: Status) -> Result<()> {
+        self.conn.execute(
+            "UPDATE annotation SET status = ?2, status_before_removal = NULL, updated_at = ?3 WHERE id = ?1",
+            params![id, status.as_str(), Utc::now()],
+        )?;
+        Ok(())
+    }
+
+    /// Accepts the device's latest values, dropping the user's overrides.
+    pub fn accept_device_version(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE annotation SET user_text = NULL, user_note = NULL, device_changed_at = NULL,
+                    updated_at = ?2 WHERE id = ?1",
+            params![id, Utc::now()],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn moves_a_kollate_library_and_its_image_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let old = home.path().join("kollate");
+        let new = home.path().join("word-hoard");
+        std::fs::create_dir_all(old.join("covers")).unwrap();
+        let conn = Connection::open(old.join("library.db")).unwrap();
+        let o = old.display();
+        conn.execute_batch(&format!(
+            "CREATE TABLE book (cover_path TEXT);
+             CREATE TABLE annotation (markup_svg_path TEXT, markup_jpg_path TEXT);
+             INSERT INTO book VALUES ('{o}/covers/a.jpg'), ('/elsewhere/b.jpg'), (NULL);
+             INSERT INTO annotation VALUES ('{o}/markups/1.svg', '{o}/markups/1.jpg');"
+        ))
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(migrate_library_dir(&old, &new).unwrap(), Some(old.clone()));
+        assert!(!old.exists() && new.join("covers").is_dir());
+        let conn = Connection::open(new.join("library.db")).unwrap();
+        let covers: Vec<Option<String>> = conn
+            .prepare("SELECT cover_path FROM book")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let n = new.display();
+        assert_eq!(
+            covers,
+            [
+                Some(format!("{n}/covers/a.jpg")),
+                Some("/elsewhere/b.jpg".into()),
+                None
+            ]
+        );
+        let svg: String = conn
+            .query_row("SELECT markup_svg_path FROM annotation", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(svg, format!("{n}/markups/1.svg"));
+
+        // Once Word Hoard has a library, a Kollate folder is left alone.
+        std::fs::create_dir_all(old.join("x")).unwrap();
+        std::fs::write(old.join("library.db"), b"").unwrap();
+        assert_eq!(migrate_library_dir(&old, &new).unwrap(), None);
+        assert!(old.exists());
+    }
+}

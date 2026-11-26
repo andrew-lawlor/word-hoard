@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Word Hoard
+GenericName=E-reader Highlights
+Comment=Your e-reader highlights, notes, handwriting and vocabulary
+Exec=word-hoard
+Icon=io.github.andrew_lawlor.WordHoard
+Terminal=false
+Categories=Office;GTK;GNOME;
+Keywords=kobo;koreader;ereader;e-reader;highlights;annotations;notes;handwriting;stylus;notebook;vocabulary;dictionary;anki;obsidian;readwise;
+StartupNotify=true
+DBusActivatable=false

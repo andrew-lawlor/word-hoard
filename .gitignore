@@ -6,3 +6,4 @@ target/
 /flatpak/build-dir/
 /flatpak/repo/
 /sesh.txt
+__pycache__/
