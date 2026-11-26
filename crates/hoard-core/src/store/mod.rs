@@ -8,7 +8,9 @@ mod query;
 mod schema;
 mod vocab;
 
-pub use books::{AddMode, AddOutcome, AddedFile, BOOKS_ROOT_SETTING, BookFile, default_books_root};
+pub use books::{
+    AddMode, AddOutcome, AddedFile, BOOKS_ROOT_SETTING, BookDetails, BookFile, default_books_root,
+};
 pub use markup::{MarkupJob, page_words_path};
 pub use pen::GLOSSES_SETTING;
 pub(crate) use pen::apply_pen_marks;

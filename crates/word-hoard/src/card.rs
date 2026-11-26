@@ -2,8 +2,8 @@
 
 use adw::prelude::*;
 use chrono::Local;
-use gtk::gio;
-use hoard_core::store::{Annotation, Book, Status};
+use gtk::{gio, glib};
+use hoard_core::store::{Annotation, Book, BookDetails, BookFile, Status};
 
 pub fn format_date(date: chrono::DateTime<chrono::Utc>) -> String {
     date.with_timezone(&Local).format("%-d %b %Y").to_string()
@@ -279,16 +279,21 @@ pub fn build(a: &Annotation, in_book_view: bool, name_reader: bool) -> gtk::Widg
 }
 
 /// The header row at the top of a book's page: cover, title and progress.
-pub fn book_header(book: &Book) -> gtk::ListBoxRow {
-    let hbox = gtk::Box::builder()
-        .spacing(18)
+/// The top of a book's page: cover, details, description and files.
+pub fn book_header(book: &Book, details: &BookDetails) -> gtk::ListBoxRow {
+    let outer = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
         .margin_top(6)
         .margin_bottom(12)
         .build();
+    let hbox = gtk::Box::builder().spacing(18).build();
+    const COVER_W: i32 = 140;
     let cover = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Cover)
-        .width_request(96)
-        .height_request(144)
+        .can_shrink(true)
+        .width_request(COVER_W)
+        .height_request(COVER_W * 3 / 2)
         .valign(gtk::Align::Start)
         .css_classes(["book-cover"])
         .build();
@@ -297,33 +302,188 @@ pub fn book_header(book: &Book) -> gtk::ListBoxRow {
         None => cover.add_css_class("no-cover"),
     }
     cover.update_property(&[gtk::accessible::Property::Label("Cover")]);
-    hbox.append(&cover);
+    // A picture asks for its image's full size; clamp it to the cover width.
+    hbox.append(
+        &adw::Clamp::builder()
+            .maximum_size(COVER_W)
+            .tightening_threshold(COVER_W)
+            .valign(gtk::Align::Start)
+            .child(&cover)
+            .build(),
+    );
 
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
         .valign(gtk::Align::Center)
+        .hexpand(true)
         .build();
     text.append(&wrapped_label(&book.title, &["title-2"]));
     if let Some(author) = &book.author {
         text.append(&wrapped_label(author, &["dim-label"]));
     }
-    let mut facts = Vec::new();
-    if let Some(p) = book.percent_read.filter(|p| *p > 0) {
-        facts.push(format!("{p}% read"));
+    if let Some(series) = &book.series {
+        let number = book
+            .series_number
+            .as_deref()
+            .map(|n| n.strip_suffix(".0").unwrap_or(n))
+            .filter(|n| !n.is_empty() && *n != "0");
+        let line = match number {
+            Some(n) => format!("{series} #{n}"),
+            None => series.clone(),
+        };
+        text.append(&wrapped_label(&line, &[]));
     }
-    if let Some(date) = book.last_read_at {
-        facts.push(format!("last read {}", format_date(date)));
-    }
+    let mut facts: Vec<String> = Vec::new();
+    facts.extend(details.year().map(str::to_owned));
+    facts.extend(book.publisher.clone());
+    facts.extend(details.language.clone());
+    facts.extend(book.isbn.as_ref().map(|i| format!("ISBN {i}")));
     if !facts.is_empty() {
         let label = wrapped_label(&facts.join(" · "), &["caption", "dim-label"]);
         label.set_margin_top(6);
         text.append(&label);
     }
+    let mut reading = Vec::new();
+    if let Some(p) = book.percent_read.filter(|p| *p > 0) {
+        reading.push(format!("{p}% read"));
+    }
+    if let Some(date) = book.last_read_at {
+        reading.push(format!("last read {}", format_date(date)));
+    }
+    if !reading.is_empty() {
+        text.append(&wrapped_label(
+            &reading.join(" · "),
+            &["caption", "dim-label"],
+        ));
+    }
     hbox.append(&text);
+    outer.append(&hbox);
+
+    if let Some(description) = &details.description {
+        outer.append(&description_label(description));
+    }
+    if !details.files.is_empty() {
+        let files = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list"])
+            .build();
+        for file in &details.files {
+            files.append(&file_row(file));
+        }
+        outer.append(&files);
+    }
 
     gtk::ListBoxRow::builder()
-        .child(&hbox)
+        .child(&outer)
+        .selectable(false)
+        .activatable(false)
+        .focusable(false)
+        .css_classes(["book-header"])
+        .build()
+}
+
+/// A description shown in its first lines, with More to read all of it.
+fn description_label(description: &str) -> gtk::Widget {
+    const SHORT_LINES: i32 = 5;
+    let label = wrapped_label(description, &["body"]);
+    label.set_selectable(true);
+    let long =
+        description.chars().count() > 360 || description.lines().count() > SHORT_LINES as usize;
+    if !long {
+        return label.upcast();
+    }
+    label.set_lines(SHORT_LINES);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let more = gtk::Button::builder()
+        .label("More")
+        .halign(gtk::Align::Start)
+        .css_classes(["flat", "caption"])
+        .build();
+    let shown = label.clone();
+    more.connect_clicked(move |button| {
+        let expanded = shown.lines() == -1;
+        shown.set_lines(if expanded { SHORT_LINES } else { -1 });
+        shown.set_ellipsize(if expanded {
+            gtk::pango::EllipsizeMode::End
+        } else {
+            gtk::pango::EllipsizeMode::None
+        });
+        button.set_label(if expanded { "More" } else { "Less" });
+    });
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    vbox.append(&label);
+    vbox.append(&more);
+    vbox.upcast()
+}
+
+/// One of a book's files: its format and size, Open and Show in Files.
+fn file_row(file: &BookFile) -> adw::ActionRow {
+    let format = match file.format.as_str() {
+        "kepub" => "KEPUB",
+        "epub" => "EPUB",
+        other => other,
+    };
+    let row = adw::ActionRow::builder()
+        .title(format!("{format} · {}", glib::format_size(file.size)))
+        .subtitle(file.path.file_name().unwrap_or_default().to_string_lossy())
+        .subtitle_lines(1)
+        .build();
+    let missing = !file.path.is_file();
+    if missing {
+        row.set_subtitle("Missing from the books folder");
+    }
+    let open = gtk::Button::builder()
+        .label("Open")
+        .valign(gtk::Align::Center)
+        .sensitive(!missing)
+        .tooltip_text("Open in your e-book reader")
+        .build();
+    let show = gtk::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .sensitive(!missing)
+        .tooltip_text("Show in Files")
+        .build();
+    show.update_property(&[gtk::accessible::Property::Label("Show in Files")]);
+    let path = file.path.clone();
+    open.connect_clicked(move |button| {
+        let window = button.root().and_downcast::<gtk::Window>();
+        gtk::FileLauncher::new(Some(&gio::File::for_path(&path))).launch(
+            window.as_ref(),
+            None::<&gio::Cancellable>,
+            |_| {},
+        );
+    });
+    let path = file.path.clone();
+    show.connect_clicked(move |button| {
+        let window = button.root().and_downcast::<gtk::Window>();
+        gtk::FileLauncher::new(Some(&gio::File::for_path(&path))).open_containing_folder(
+            window.as_ref(),
+            None::<&gio::Cancellable>,
+            |_| {},
+        );
+    });
+    row.add_suffix(&show);
+    row.add_suffix(&open);
+    row
+}
+
+/// Shown under a book's details when it has no highlights.
+pub fn no_highlights_row() -> gtk::ListBoxRow {
+    let label = gtk::Label::builder()
+        .label("No highlights in this book yet. Highlights you make on your Kobo appear here after an import.")
+        .wrap(true)
+        .xalign(0.0)
+        .margin_top(6)
+        .css_classes(["dim-label"])
+        .build();
+    gtk::ListBoxRow::builder()
+        .child(&label)
         .selectable(false)
         .activatable(false)
         .focusable(false)

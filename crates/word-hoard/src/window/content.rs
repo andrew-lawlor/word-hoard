@@ -107,8 +107,13 @@ impl Window {
             && self.search_text().is_none()
             && let Some(book) = self.lib.borrow().book(id)?
         {
+            let details = self.lib.borrow().book_details(id)?;
             self.groups.borrow_mut().push(String::new());
-            self.list.append(&card::book_header(&book));
+            self.list.append(&card::book_header(&book, &details));
+            if items.is_empty() {
+                self.groups.borrow_mut().push(String::new());
+                self.list.append(&card::no_highlights_row());
+            }
         }
         for a in &items {
             let group = if !in_book_view {
@@ -171,10 +176,13 @@ impl Window {
 
     pub(super) fn update_empty_state(&self) {
         let on_books = self.current.get() == Nav::Library;
+        // A book's page always has its details to show.
+        let book_page = matches!(self.current.get(), Nav::Annotations(View::Book(_)))
+            && self.search_text().is_none();
         let empty = if on_books {
             self.books_shown.get() == 0
         } else {
-            self.shown.get() == (0, 0)
+            self.shown.get() == (0, 0) && !book_page
         };
         let page = match (empty, on_books) {
             (true, _) => "empty",

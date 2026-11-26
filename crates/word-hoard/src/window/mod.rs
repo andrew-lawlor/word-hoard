@@ -509,6 +509,15 @@ impl Window {
 
     pub fn present(self: &Rc<Self>) {
         self.win.present();
+        // Development only: `WORD_HOARD_OPEN=book:<id>` opens on a book's page
+        // (for screenshots and checking layouts without clicking through).
+        if cfg!(debug_assertions)
+            && let Some(id) = std::env::var("WORD_HOARD_OPEN")
+                .ok()
+                .and_then(|v| v.strip_prefix("book:")?.parse().ok())
+        {
+            self.navigate(Nav::Annotations(View::Book(id)), true);
+        }
         // Handwriting still waiting for the chosen model.
         self.transcribe_pending();
     }

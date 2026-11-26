@@ -46,6 +46,25 @@ pub struct AddedFile {
     pub outcome: AddOutcome,
 }
 
+/// What the book detail page shows beyond [`super::Book`].
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BookDetails {
+    pub description: Option<String>,
+    /// As the book gives it (`1974`, `1974-05-01`, …).
+    pub published: Option<String>,
+    pub language: Option<String>,
+    pub files: Vec<BookFile>,
+}
+
+impl BookDetails {
+    /// The year of publication, if the date has one.
+    pub fn year(&self) -> Option<&str> {
+        let date = self.published.as_deref()?;
+        date.get(..4)
+            .filter(|y| y.bytes().all(|b| b.is_ascii_digit()))
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BookFile {
     pub id: i64,
@@ -372,6 +391,24 @@ impl Library {
                 params![book_id, dest.to_string_lossy()],
             );
         }
+    }
+
+    pub fn book_details(&self, book_id: i64) -> Result<BookDetails> {
+        let (description, published, language) = self
+            .conn
+            .query_row(
+                "SELECT description, published, language FROM book WHERE id = ?1",
+                [book_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?
+            .unwrap_or_default();
+        Ok(BookDetails {
+            description,
+            published,
+            language,
+            files: self.book_files(book_id)?,
+        })
     }
 
     /// A book's files, oldest first.
