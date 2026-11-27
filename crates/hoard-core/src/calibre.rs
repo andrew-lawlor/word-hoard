@@ -68,6 +68,94 @@ fn parse_date(s: Option<String>) -> Option<DateTime<Utc>> {
     (chrono::Datelike::year(&parsed) > 101).then_some(parsed)
 }
 
+/// Calibre libraries on this computer, most likely first: the ones Calibre
+/// itself remembers (its regular and Flatpak settings), `~/Calibre Library`,
+/// then any `metadata.db` within a few folders of home (a library kept in a
+/// synced folder, say, on a computer without Calibre). Hidden folders aren't
+/// searched.
+pub fn find_libraries(home: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut add = |p: PathBuf| {
+        if p.join("metadata.db").is_file() && !found.contains(&p) {
+            found.push(p);
+        }
+    };
+    for config in [
+        home.join(".config/calibre"),
+        home.join(".var/app/com.calibre_ebook.calibre/config/calibre"),
+    ] {
+        for path in remembered_libraries(&config) {
+            add(path);
+        }
+    }
+    add(home.join("Calibre Library"));
+    let mut searched = Vec::new();
+    search_for_libraries(home, 3, &mut searched);
+    for path in searched {
+        add(path);
+    }
+    found
+}
+
+/// The libraries in Calibre's settings: the current one, then recent ones.
+fn remembered_libraries(config: &Path) -> Vec<PathBuf> {
+    let read = |name: &str| -> Option<serde_json::Value> {
+        serde_json::from_str(&std::fs::read_to_string(config.join(name)).ok()?).ok()
+    };
+    let mut paths = Vec::new();
+    if let Some(path) = read("global.py.json")
+        .as_ref()
+        .and_then(|v| v.get("library_path"))
+        .and_then(|v| v.as_str())
+    {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(stats) = read("gui.json")
+        .as_ref()
+        .and_then(|v| v.get("library_usage_stats"))
+        .and_then(|v| v.as_object())
+    {
+        let mut recent: Vec<(&String, f64)> = stats
+            .iter()
+            .map(|(k, v)| (k, v.as_f64().unwrap_or(0.0)))
+            .collect();
+        recent.sort_by(|a, b| b.1.total_cmp(&a.1));
+        paths.extend(recent.into_iter().map(|(k, _)| PathBuf::from(k)));
+    }
+    paths
+}
+
+fn search_for_libraries(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        if dir.join("metadata.db").is_file() {
+            found.push(dir);
+        } else if depth > 1 {
+            search_for_libraries(&dir, depth - 1, found);
+        }
+    }
+}
+
+/// How many books a Calibre library has (read-only; `None` if unreadable).
+pub fn count_books(root: &Path) -> Option<usize> {
+    let conn = Connection::open_with_flags(
+        root.join("metadata.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.query_row("SELECT count(*) FROM books", [], |r| r.get(0))
+        .ok()
+}
+
 /// Reads every book in a Calibre library folder.
 pub fn read_library(root: &Path) -> Result<Vec<CalibreBook>> {
     let db_path = root.join("metadata.db");
@@ -584,5 +672,29 @@ pub(crate) mod tests {
             read_library(dir.path()),
             Err(Error::NotACalibreLibrary(_))
         ));
+    }
+
+    #[test]
+    fn finds_calibre_libraries() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let lib = |p: &str| {
+            let p = home.join(p);
+            std::fs::create_dir_all(&p).unwrap();
+            std::fs::write(p.join("metadata.db"), b"").unwrap();
+            p
+        };
+        let remembered = lib("Elsewhere/Remembered");
+        let usual = lib("Calibre Library");
+        let synced = lib("Nextcloud/books");
+        lib(".hidden/Library");
+        lib("a/b/c/too deep");
+        std::fs::create_dir_all(home.join(".config/calibre")).unwrap();
+        std::fs::write(
+            home.join(".config/calibre/global.py.json"),
+            format!(r#"{{"library_path": "{}"}}"#, remembered.display()),
+        )
+        .unwrap();
+        assert_eq!(find_libraries(home), [remembered, usual, synced]);
     }
 }

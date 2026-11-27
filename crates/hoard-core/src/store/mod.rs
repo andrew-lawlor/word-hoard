@@ -329,6 +329,10 @@ impl Library {
 
     fn init(conn: Connection, dir: Option<PathBuf>) -> Result<Self> {
         conn.pragma_update(None, "journal_mode", "wal")?;
+        // The app writes from background threads (importing from the Kobo
+        // and adding books can run at once): wait for each other's writes
+        // rather than failing with "database is locked".
+        conn.busy_timeout(std::time::Duration::from_secs(30))?;
         // Foreign keys are off while migrating, as SQLite advises for
         // rebuilding a table: dropping the old one would otherwise cascade.
         conn.pragma_update(None, "foreign_keys", false)?;

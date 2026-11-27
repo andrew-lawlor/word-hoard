@@ -29,6 +29,8 @@ mod device;
 mod exports;
 mod library;
 mod library_folder;
+
+pub(crate) use books::collect_books;
 mod preferences;
 mod share;
 mod sidebar;
@@ -187,6 +189,8 @@ pub struct Window {
     monitor: gio::VolumeMonitor,
     kobo: RefCell<Option<Connected>>,
     importing: Cell<bool>,
+    /// Books are being added (from files, a folder or Calibre).
+    adding_books: Cell<bool>,
     /// Books are being sent to the Kobo (one send at a time; no eject).
     sending: Cell<bool>,
     /// Handwriting is being read in the background.
@@ -200,6 +204,7 @@ pub struct Window {
     search: gtk::SearchEntry,
     stack: gtk::Stack,
     empty: adw::StatusPage,
+    empty_actions: gtk::Box,
     list: gtk::ListBox,
     /// Parallel to the list's rows: the group heading each row belongs to.
     groups: Rc<RefCell<Vec<String>>>,
@@ -393,6 +398,28 @@ impl Window {
             .child(&clamp)
             .build();
         let empty = adw::StatusPage::new();
+        // Shown on an empty Library: ways to fill it.
+        let empty_actions = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .halign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        for (label, action, style) in [
+            ("Add Books…", "win.add-books", "suggested-action"),
+            ("Import from Calibre…", "win.import-calibre", ""),
+        ] {
+            let button = gtk::Button::builder()
+                .label(label)
+                .action_name(action)
+                .css_classes(["empty-action"])
+                .build();
+            if !style.is_empty() {
+                button.add_css_class(style);
+            }
+            empty_actions.append(&button);
+        }
+        empty.set_child(Some(&empty_actions));
         let stack = gtk::Stack::new();
         stack.add_named(&scrolled, Some("list"));
         stack.add_named(&library.stack, Some("books"));
@@ -452,6 +479,7 @@ impl Window {
             monitor: gio::VolumeMonitor::get(),
             kobo: RefCell::default(),
             importing: Cell::new(false),
+            adding_books: Cell::new(false),
             sending: Cell::new(false),
             transcribing: Cell::new(false),
             transcribe_again: Cell::new(false),
@@ -462,6 +490,7 @@ impl Window {
             search,
             stack,
             empty,
+            empty_actions,
             list,
             groups: Rc::default(),
             shown: Cell::new((0, 0)),
@@ -502,6 +531,16 @@ impl Window {
             let this = self.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
                 this.eject()
+            });
+        }
+        // Development only: `WORD_HOARD_ADD=<path>` adds the books there,
+        // as the welcome window's "In a Folder" does.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("WORD_HOARD_ADD")
+        {
+            let this = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1000), move || {
+                this.add_book_files(&[PathBuf::from(path)]);
             });
         }
         // Development only: `WORD_HOARD_OPEN=preferences` opens Preferences.

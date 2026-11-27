@@ -106,3 +106,11 @@
   box-shadow: inset 0 0 0 3px @accent_color;
   background-color: alpha(@accent_bg_color, 0.08);
 }
+
+/* Big rounded buttons on an empty page (libadwaita's .pill, which the
+   tag style above takes over). */
+.empty-action {
+  padding: 10px 32px;
+  border-radius: 999px;
+  min-width: 200px;
+}

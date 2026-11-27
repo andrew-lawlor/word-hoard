@@ -39,7 +39,7 @@ impl Window {
     /// Adds books to the library in a background thread (copying them into
     /// the books folder), then shows what happened. Folders are searched for
     /// EPUBs; other files are counted as skipped.
-    pub(super) fn add_book_files(self: &Rc<Self>, paths: &[std::path::PathBuf]) {
+    pub(crate) fn add_book_files(self: &Rc<Self>, paths: &[std::path::PathBuf]) {
         let (books, skipped) = collect_books(paths);
         if books.is_empty() {
             return self.toast(if skipped > 0 {
@@ -48,20 +48,29 @@ impl Window {
                 "No books to add"
             });
         }
-        if self.importing.get() {
-            return self.toast("Still importing. Add books when it’s done.");
+        if self.adding_books.get() {
+            return self.toast("Still adding books. Add more when it’s done.");
         }
         let Some(db) = self.lib.borrow().path().map(Path::to_path_buf) else {
             return;
         };
-        self.importing.set(true);
-        self.start_progress(&format!("Adding {}…", plural(books.len(), "book", "books")));
+        self.adding_books.set(true);
+        let total = books.len();
+        self.start_progress(&format!("Adding {}…", plural(total, "book", "books")));
+        let done = std::sync::Arc::new(AtomicUsize::new(0));
+        let done_view = done.clone();
+        self.tick_while_adding(move || {
+            let n = done_view.load(Ordering::Relaxed);
+            Some(format!("Adding books… {n} of {total}"))
+        });
         let this = self.clone();
+        let job_done = done.clone();
         glib::spawn_future_local(async move {
             let result = gio::spawn_blocking(move || {
                 let lib = hoard_core::Library::open(&db)?;
                 let (mut added, mut known, mut failed) = (0usize, 0usize, Vec::new());
-                for path in &books {
+                for (i, path) in books.iter().enumerate() {
+                    job_done.store(i, Ordering::Relaxed);
                     match lib.add_file(path, AddMode::Copy) {
                         Ok(a) if a.outcome == AddOutcome::AlreadyInLibrary => known += 1,
                         Ok(_) => added += 1,
@@ -74,7 +83,7 @@ impl Window {
                 hoard_core::Result::Ok((added, known, failed))
             })
             .await;
-            this.importing.set(false);
+            this.adding_books.set(false);
             this.set_progress(None);
             let (added, known, failed) = match result {
                 Ok(Ok(r)) => r,
@@ -120,9 +129,8 @@ impl Window {
             .modal(true)
             .build();
         let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-        let default = home.join("Calibre Library");
-        if default.is_dir() {
-            dialog.set_initial_folder(Some(&gio::File::for_path(default)));
+        if let Some(found) = hoard_core::calibre::find_libraries(&home).first() {
+            dialog.set_initial_folder(Some(&gio::File::for_path(found)));
         }
         let this = self.clone();
         glib::spawn_future_local(async move {
@@ -130,49 +138,56 @@ impl Window {
                 return;
             };
             let Some(path) = folder.path() else { return };
-            if !path.join("metadata.db").is_file() {
-                return this.error(
-                    "Not a Calibre Library",
-                    "Choose the folder that holds Calibre’s metadata.db (usually “Calibre Library” in your home folder).",
-                );
-            }
+            this.import_calibre_from(path);
+        });
+    }
+
+    /// Imports the Calibre library at `path` in the background, with a
+    /// running count and the Library filling in as books arrive. Books are
+    /// hard-linked where they can be (same drive: no extra space; Calibre's
+    /// files aren't changed), copied otherwise.
+    pub(crate) fn import_calibre_from(self: &Rc<Self>, path: PathBuf) {
+        if !path.join("metadata.db").is_file() {
+            return self.error(
+                "Not a Calibre Library",
+                "Choose the folder that holds Calibre’s metadata.db (usually “Calibre Library” in your home folder).",
+            );
+        }
+        if self.adding_books.get() {
+            return self.toast("Still adding books. Import when it’s done.");
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
             let Some(db) = this.lib.borrow().path().map(Path::to_path_buf) else {
                 return;
             };
             let progress = std::sync::Arc::new((AtomicUsize::new(0), AtomicUsize::new(0)));
+            this.adding_books.set(true);
             this.start_progress("Importing your Calibre library…");
-            let ticking = Rc::new(Cell::new(true));
             {
-                let (this, progress, ticking) = (this.clone(), progress.clone(), ticking.clone());
-                glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
-                    if !ticking.get() {
-                        return glib::ControlFlow::Break;
-                    }
+                let progress = progress.clone();
+                this.tick_while_adding(move || {
                     let (done, total) = (
                         progress.0.load(Ordering::Relaxed),
                         progress.1.load(Ordering::Relaxed),
                     );
-                    if total > 0 {
-                        this.set_progress(Some(&format!(
-                            "Importing from Calibre… {done} of {total} books"
-                        )));
-                    }
-                    glib::ControlFlow::Continue
+                    (total > 0).then(|| format!("Importing from Calibre… {done} of {total} books"))
                 });
             }
             let job_progress = progress.clone();
             let result = gio::spawn_blocking(move || {
                 let lib = hoard_core::Library::open(&db)?;
-                lib.import_calibre(&path, AddMode::Copy, |done, total| {
+                lib.import_calibre(&path, AddMode::Link, |done, total| {
                     job_progress.0.store(done, Ordering::Relaxed);
                     job_progress.1.store(total, Ordering::Relaxed);
                 })
             })
             .await;
-            ticking.set(false);
+            this.adding_books.set(false);
             this.set_progress(None);
             this.rebuild_sidebar();
             this.reload();
+            this.refresh_on_device();
             match result {
                 Ok(Ok(stats)) => {
                     let mut parts = vec![format!(
@@ -387,6 +402,35 @@ impl Window {
     }
 }
 
+impl Window {
+    /// While books are being added: shows `status()` as the progress text and
+    /// refreshes the Library every couple of seconds, so books appear as
+    /// they arrive. Stops once adding is done.
+    fn tick_while_adding(self: &Rc<Self>, status: impl Fn() -> Option<String> + 'static) {
+        let weak = Rc::downgrade(self);
+        let mut ticks = 0u32;
+        glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !this.adding_books.get() {
+                return glib::ControlFlow::Break;
+            }
+            if let Some(text) = status() {
+                this.set_progress(Some(&text));
+            }
+            ticks += 1;
+            if ticks.is_multiple_of(7)
+                && this.current.get() == Nav::Library
+                && this.search_text().is_none()
+            {
+                this.refresh_library_books();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+}
+
 /// "2 already on the Kobo, 1 with no file" from the reasons books were skipped.
 fn summarize_skipped(skipped: &[hoard_core::store::send::Skipped]) -> String {
     let mut counts: Vec<(&str, usize)> = Vec::new();
@@ -408,7 +452,7 @@ fn summarize_skipped(skipped: &[hoard_core::store::send::Skipped]) -> String {
 
 /// The EPUBs among `paths`, looking inside folders (not hidden ones), and
 /// how many other files were left out.
-fn collect_books(paths: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, usize) {
+pub(crate) fn collect_books(paths: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, usize) {
     fn is_epub(path: &Path) -> bool {
         path.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("epub"))

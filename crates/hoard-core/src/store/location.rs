@@ -51,6 +51,17 @@ pub fn folder_of(db: &Path) -> Option<&Path> {
     (data.file_name()? == LIBRARY_DATA_DIR).then(|| data.parent())?
 }
 
+/// The open library's database, if a library has been chosen (or one from
+/// before libraries were folders was found and brought into its folder).
+/// `None` the first time Word Hoard runs: the app asks where the books are.
+pub fn chosen_library() -> Result<Option<PathBuf>> {
+    let local = local_dir();
+    if !local.join(POINTER).is_file() && !local.join(DB_NAME).is_file() {
+        return Ok(None);
+    }
+    current_library_in(&local, super::books::default_books_root).map(Some)
+}
+
 /// The open library's database. The first time, that's the library in the
 /// default books folder; a library from before libraries were folders (its
 /// database in [`local_dir`]) is moved into its books folder first.

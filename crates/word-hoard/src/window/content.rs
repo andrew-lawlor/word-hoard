@@ -153,6 +153,13 @@ impl Window {
         Ok(words.len())
     }
 
+    /// Re-reads the Library's books in place (no other page changes).
+    pub(super) fn refresh_library_books(self: &Rc<Self>) {
+        if self.fill_books().is_ok() {
+            self.update_empty_state();
+        }
+    }
+
     fn fill_books(self: &Rc<Self>) -> hoard_core::Result<()> {
         let sort = BookSort::ALL[(self.book_sort.selected() as usize).min(BookSort::ALL.len() - 1)];
         let books = self
@@ -179,6 +186,7 @@ impl Window {
             (false, false) => "list",
         };
         self.stack.set_visible_child_name(page);
+        self.empty_actions.set_visible(false);
         if !empty {
             return;
         }
@@ -194,11 +202,11 @@ impl Window {
                 "No Results",
                 "Try a different search.",
             )
-        } else if lib_empty {
+        } else if lib_empty && !on_books {
             (
                 "media-removable-symbolic",
-                "Welcome to Word Hoard",
-                "Add your EPUB books with Add Books (Ctrl+O), or connect your Kobo with a USB cable and choose Import (Ctrl+I) to bring in your highlights. Word Hoard writes to the Kobo only when you send it books.",
+                "No Highlights Yet",
+                "Connect your Kobo with a USB cable to bring in your highlights, or choose Import (Ctrl+I). Word Hoard writes to the Kobo only when you send it books.",
             )
         } else {
             match self.current.get() {
@@ -213,11 +221,14 @@ impl Window {
                     "Press S on a highlight to star it.",
                 ),
                 Nav::Annotations(View::Trash) => ("user-trash-symbolic", "Trash Is Empty", ""),
-                Nav::Library => (
-                    "folder-documents-symbolic",
-                    "No Books",
-                    "Add EPUB books with Add Books (Ctrl+O). Books you've highlighted on your Kobo appear here too.",
-                ),
+                Nav::Library => {
+                    self.empty_actions.set_visible(true);
+                    (
+                        "folder-documents-symbolic",
+                        "Your Library Is Empty",
+                        "Add EPUB books, or drop them, or whole folders of them, on this window. Books you’ve highlighted on your Kobo appear here too.",
+                    )
+                }
                 Nav::Annotations(View::RemovedOnDevice) => (
                     "edit-delete-symbolic",
                     "Nothing Deleted on Your Kobo",

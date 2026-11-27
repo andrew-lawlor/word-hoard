@@ -6,6 +6,7 @@ mod edit;
 mod portal;
 mod share;
 mod shortcuts;
+mod welcome;
 mod window;
 mod word;
 
@@ -53,10 +54,15 @@ fn main() -> glib::ExitCode {
 
 /// The library database: the open library folder's (see
 /// `hoard_core::store::location`); `WORD_HOARD_LIBRARY` overrides it.
-fn library_path() -> hoard_core::Result<std::path::PathBuf> {
+/// `None` the first time, before a library is chosen.
+fn library_path() -> hoard_core::Result<Option<std::path::PathBuf>> {
+    // Development only: `WORD_HOARD_OPEN=welcome` shows the welcome window.
+    if cfg!(debug_assertions) && std::env::var("WORD_HOARD_OPEN").as_deref() == Ok("welcome") {
+        return Ok(None);
+    }
     match std::env::var_os("WORD_HOARD_LIBRARY") {
-        Some(path) => Ok(path.into()),
-        None => hoard_core::current_library(),
+        Some(path) => Ok(Some(path.into())),
+        None => hoard_core::chosen_library(),
     }
 }
 
@@ -85,7 +91,11 @@ fn activate(app: &adw::Application) {
     ));
     app.add_action(&quit);
 
-    let path = library_path();
+    let path = match library_path() {
+        Ok(Some(path)) => Ok(path),
+        Ok(None) => return welcome::show(app),
+        Err(err) => Err(err),
+    };
     let opened = path
         .as_ref()
         .map_err(|e| e.to_string())

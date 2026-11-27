@@ -48,7 +48,7 @@ impl Window {
     }
 
     fn choose_library_folder(self: &Rc<Self>, prefs: &adw::PreferencesDialog) {
-        if self.importing.get() || self.sending.get() {
+        if self.importing.get() || self.adding_books.get() || self.sending.get() {
             return self.error(
                 "Library Busy",
                 "Wait for Word Hoard to finish importing or sending books, then change the library folder.",
