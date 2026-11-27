@@ -4,9 +4,10 @@
 //!
 //! A [`DeviceWriter`] exists only while a send the user approved is being
 //! applied. Opening one backs up the Kobo's database first. It can copy a
-//! book file into the Kobo's storage, and nothing else: no database writes
-//! (the Kobo indexes new books itself when it's ejected), no deletes, no
-//! overwrites, nothing under `.kobo` or other hidden folders.
+//! book file into the Kobo's storage (replacing a book file only when asked),
+//! and clear the covers the Kobo saved for that book, and nothing else: no
+//! database writes (the Kobo indexes new books itself when it's ejected), no
+//! other deletes, nothing else under `.kobo` or other hidden folders.
 
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -84,6 +85,40 @@ impl DeviceWriter {
     /// Word Hoard's `book_source` record it.
     pub fn volume_id(relative: &Path) -> String {
         format!("file:///mnt/onboard/{}", relative.to_string_lossy())
+    }
+
+    /// The Kobo's `ImageId` for a sideloaded book: its `ContentID` with
+    /// `/`, spaces, `:` and `.` turned into `_` (as Calibre computes it).
+    pub fn image_id(relative: &Path) -> String {
+        Self::volume_id(relative).replace(['/', ' ', ':', '.'], "_")
+    }
+
+    /// Deletes the covers the Kobo saved for the book at `relative`
+    /// (`.kobo-images/<a>/<b>/<ImageId> - *.parsed`), so a book sent again to
+    /// the same path gets its new cover instead of the one saved for the old
+    /// copy. Only those files are touched. Returns how many were deleted.
+    pub fn forget_cover(&self, relative: &Path) -> Result<usize> {
+        let relative = check_relative(relative)?;
+        let image_id = Self::image_id(relative);
+        let h = super::assets::qhash(&image_id);
+        let dir = self
+            .mount
+            .join(".kobo-images")
+            .join((h & 0xff).to_string())
+            .join(((h & 0xff00) >> 8).to_string());
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Ok(0);
+        };
+        let prefix = format!("{image_id} - ");
+        let mut deleted = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) && name.ends_with(".parsed") && entry.path().is_file() {
+                std::fs::remove_file(entry.path())?;
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
     }
 
     /// Whether a file already exists at `relative` on the Kobo.
@@ -233,6 +268,43 @@ mod tests {
             DeviceWriter::volume_id(rel),
             "file:///mnt/onboard/Books/Ursula K. Le Guin/The Dispossessed.kepub.epub"
         );
+    }
+
+    #[test]
+    fn forgets_only_the_sent_books_saved_covers() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fake_kobo(&kobo);
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        let rel = Path::new("Books/Harry Harrison/The Hammer and the Cross.kepub.epub");
+        let id = DeviceWriter::image_id(rel);
+        assert_eq!(
+            id,
+            "file____mnt_onboard_Books_Harry_Harrison_The_Hammer_and_the_Cross_kepub_epub"
+        );
+        // Where the Kobo keeps them: worked out on a Libra Colour (146/160).
+        let cache = kobo.join(".kobo-images/146/160");
+        std::fs::create_dir_all(&cache).unwrap();
+        for kind in ["N3_FULL", "N3_LIBRARY_FULL", "N3_LIBRARY_GRID"] {
+            std::fs::write(cache.join(format!("{id} - {kind}.parsed")), b"old").unwrap();
+        }
+        let other = cache.join("file____mnt_onboard_Books_Other_kepub_epub - N3_FULL.parsed");
+        std::fs::write(&other, b"keep").unwrap();
+        std::fs::write(cache.join(format!("{id} - notes.txt")), b"keep").unwrap();
+        assert_eq!(writer.forget_cover(rel).unwrap(), 3);
+        assert!(other.is_file());
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 2);
+        // Nothing saved: nothing to do.
+        assert_eq!(
+            writer
+                .forget_cover(Path::new("Books/New.kepub.epub"))
+                .unwrap(),
+            0
+        );
+        assert!(matches!(
+            writer.forget_cover(Path::new("../x.epub")),
+            Err(Error::BadKoboPath(_))
+        ));
     }
 
     #[test]

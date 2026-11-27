@@ -232,6 +232,9 @@ impl Library {
                     }
                     SendAction::Copy => item.source.clone(),
                 };
+                // A cover the Kobo saved for an earlier copy at this path
+                // would be shown instead of the new one.
+                writer.forget_cover(&item.dest)?;
                 if item.replace {
                     writer.replace_book(&file, &item.dest)?;
                 } else {

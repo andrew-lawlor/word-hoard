@@ -10,7 +10,7 @@ use crate::markup::image::compose_page;
 
 /// Kobo's `qhash` of an `ImageId`, used to pick the `.kobo-images/<a>/<b>/`
 /// directory (same algorithm as calibre's KoboTouch driver).
-fn qhash(s: &str) -> u32 {
+pub(crate) fn qhash(s: &str) -> u32 {
     let mut h: u32 = 0;
     for b in s.bytes() {
         h = (h << 4).wrapping_add(b as u32);
