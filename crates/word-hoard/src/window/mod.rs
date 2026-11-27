@@ -28,6 +28,7 @@ mod content;
 mod device;
 mod exports;
 mod library;
+mod library_folder;
 mod preferences;
 mod share;
 mod sidebar;
@@ -501,6 +502,15 @@ impl Window {
             let this = self.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
                 this.eject()
+            });
+        }
+        // Development only: `WORD_HOARD_OPEN=preferences` opens Preferences.
+        if cfg!(debug_assertions)
+            && std::env::var("WORD_HOARD_OPEN").as_deref() == Ok("preferences")
+        {
+            let this = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+                this.show_preferences();
             });
         }
         // Development only: `WORD_HOARD_OPEN=select-all` selects every book

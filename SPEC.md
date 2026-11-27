@@ -97,16 +97,18 @@ One SQLite database plus a plain folder of books; the database is the index, the
 **On disk**
 
 ```
-~/Books/                         # user-chosen library root (default $XDG_DOCUMENTS_DIR/Books)
+~/Documents/Books/               # the library folder (any folder; chosen in Preferences)
   Ursula K. Le Guin/
     The Dispossessed (1974)/
-      book.epub
-      cover.jpg
-      book.kepub.epub            # generated, cached, safe to delete
-$XDG_DATA_HOME/word-hoard/
-  library.db                     # SQLite, WAL mode, FTS5 tables
-  embeddings.db                  # sqlite-vec, rebuildable
+      The Dispossessed.epub
+  .word-hoard/                   # everything about the books: the folder is the whole library
+    library.db                   # SQLite, WAL mode, FTS5 tables
+    covers/  markups/
+    embeddings.db                # sqlite-vec, rebuildable
+$XDG_DATA_HOME/word-hoard/       # this computer's own files
+  library-folder                 # which library folder is open
   backups/kobo/<serial>/<ts>/KoboReader.sqlite
+  models/  dictionaries/
 ```
 
 **Core entities**

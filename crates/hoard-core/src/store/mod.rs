@@ -2,6 +2,7 @@
 //! Nothing here ever touches the device.
 
 pub mod books;
+pub mod location;
 mod markup;
 mod pen;
 mod query;
@@ -38,18 +39,13 @@ pub struct Library {
 }
 
 /// `$XDG_DATA_HOME`, defaulting to `~/.local/share`.
-fn data_home() -> PathBuf {
+pub(crate) fn data_home() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
         })
-}
-
-/// `$XDG_DATA_HOME/word-hoard/library.db`, defaulting to `~/.local/share`.
-pub fn default_library_path() -> PathBuf {
-    data_home().join("word-hoard/library.db")
 }
 
 /// Word Hoard was called Kollate up to 0.7, and kept its library in
@@ -68,22 +64,7 @@ fn migrate_library_dir(old: &Path, new: &Path) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     std::fs::rename(old, new)?;
-    let conn = Connection::open(new.join("library.db"))?;
-    let from = format!("{}/", old.display());
-    let to = format!("{}/", new.display());
-    for (table, column) in [
-        ("book", "cover_path"),
-        ("annotation", "markup_svg_path"),
-        ("annotation", "markup_jpg_path"),
-    ] {
-        conn.execute(
-            &format!(
-                "UPDATE {table} SET {column} = ?2 || substr({column}, length(?1) + 1)
-                 WHERE substr({column}, 1, length(?1)) = ?1"
-            ),
-            params![from, to],
-        )?;
-    }
+    location::rewrite_asset_paths(&new.join("library.db"), old, new)?;
     Ok(Some(old.to_path_buf()))
 }
 

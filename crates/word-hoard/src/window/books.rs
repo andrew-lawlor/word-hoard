@@ -321,14 +321,8 @@ impl Window {
         db: std::path::PathBuf,
         root: std::path::PathBuf,
     ) {
-        let Some(backups) = self
-            .lib
-            .borrow()
-            .assets_dir()
-            .map(|d| d.join("backups/kobo"))
-        else {
-            return;
-        };
+        // Backups belong to this computer, not the library folder.
+        let backups = hoard_core::local_dir().join("backups/kobo");
         if self.sending.replace(true) {
             return self.toast("Still sending to your Kobo. Send more when it’s done.");
         }

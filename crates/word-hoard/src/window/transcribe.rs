@@ -11,7 +11,7 @@ const CPU_ONLY: &str = "transcribe_cpu_only";
 
 impl Window {
     fn models_dir(&self) -> Option<PathBuf> {
-        self.lib.borrow().assets_dir().map(|d| d.join("models"))
+        Some(hoard_core::local_dir().join("models"))
     }
 
     fn chosen_model(&self) -> Option<Installed> {
@@ -40,7 +40,7 @@ impl Window {
         };
         self.transcribing.set(true);
         let gpu = !self.flag(CPU_ONLY);
-        let dictionary_dirs = dict::search_dirs(self.lib.borrow().assets_dir().as_deref());
+        let dictionary_dirs = dict::search_dirs(Some(&hoard_core::local_dir()));
         // A toast that stays while reading, counting through a long run
         // (a first import can bring hundreds of markups).
         let total = jobs.len();

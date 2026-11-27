@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use hoard_core::Library;
 use hoard_core::kobo::{
     AnnotationKind, DeviceInfo, KoboDb, KoboSnapshot, find_kobo_db, is_tested_db_version,
 };
-use hoard_core::{Library, default_library_path};
 
 #[derive(Parser)]
 #[command(
@@ -87,9 +87,6 @@ enum Command {
         /// Hard-link files instead of copying them (same filesystem only).
         #[arg(long)]
         link: bool,
-        /// Use this as the books folder from now on.
-        #[arg(long, value_name = "DIR")]
-        books_folder: Option<PathBuf>,
     },
     /// Add EPUB files (or folders of them) to the library's books folder.
     Add {
@@ -99,9 +96,6 @@ enum Command {
         /// Hard-link instead of copying (same filesystem only; else copies).
         #[arg(long)]
         link: bool,
-        /// Use this as the books folder from now on.
-        #[arg(long, value_name = "DIR")]
-        books_folder: Option<PathBuf>,
     },
     /// Handwriting models for transcribing stylus markups (list them, or add files).
     Models {
@@ -198,7 +192,10 @@ fn main() -> Result<()> {
     {
         eprintln!("Moved Kollate's library from {}", old.display());
     }
-    let library_path = cli.library.unwrap_or_else(default_library_path);
+    let library_path = match cli.library {
+        Some(path) => path,
+        None => hoard_core::current_library()?,
+    };
     match cli.command {
         Command::Inspect { path, json } => inspect(path, json),
         Command::Report { path, output } => report(&path, output.as_deref()),
@@ -219,16 +216,8 @@ fn main() -> Result<()> {
             replace,
         ),
         Command::Search { words, limit } => search(&library_path, &words.join(" "), limit),
-        Command::ImportCalibre {
-            path,
-            link,
-            books_folder,
-        } => import_calibre(&library_path, &path, link, books_folder.as_deref()),
-        Command::Add {
-            paths,
-            link,
-            books_folder,
-        } => add(&library_path, &paths, link, books_folder.as_deref()),
+        Command::ImportCalibre { path, link } => import_calibre(&library_path, &path, link),
+        Command::Add { paths, link } => add(&library_path, &paths, link),
         Command::Models { action } => models(&library_path, action),
         Command::Transcribe { model, cpu } => transcribe(&library_path, model.as_deref(), cpu),
         Command::Dict(cmd) => dict(cmd),
@@ -393,10 +382,8 @@ enum ModelsAction {
 }
 
 fn models_dir(lib: &Library) -> Result<PathBuf> {
-    Ok(lib
-        .assets_dir()
-        .ok_or_else(|| anyhow::anyhow!("no library folder"))?
-        .join("models"))
+    let _ = lib;
+    Ok(hoard_core::local_dir().join("models"))
 }
 
 fn models(library_path: &Path, action: Option<ModelsAction>) -> Result<()> {
@@ -470,8 +457,9 @@ fn transcribe(library_path: &Path, model: Option<&str>, cpu: bool) -> Result<()>
         return Ok(());
     }
     // Dictionaries tell misread names apart from real words (SPEC §8a).
-    let dicts =
-        hoard_core::dict::open_all(&hoard_core::dict::search_dirs(lib.assets_dir().as_deref()));
+    let dicts = hoard_core::dict::open_all(&hoard_core::dict::search_dirs(Some(
+        &hoard_core::local_dir(),
+    )));
     let known = |w: &str| dicts.iter().any(|d| d.lookup(w).ok().flatten().is_some());
     let known: Option<&dyn Fn(&str) -> bool> = (!dicts.is_empty()).then_some(&known);
     let started = std::time::Instant::now();
@@ -532,17 +520,9 @@ fn library(library_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn add(
-    library_path: &Path,
-    paths: &[PathBuf],
-    link: bool,
-    books_folder: Option<&Path>,
-) -> Result<()> {
+fn add(library_path: &Path, paths: &[PathBuf], link: bool) -> Result<()> {
     use hoard_core::store::{AddMode, AddOutcome};
     let lib = Library::open(library_path)?;
-    if let Some(folder) = books_folder {
-        lib.set_books_root(folder)?;
-    }
     println!("Books folder: {}", lib.books_root()?.display());
     let mut files = Vec::new();
     for path in paths {
@@ -631,10 +611,7 @@ fn send(
         println!("Nothing was written. Run again with --yes to send them.");
         return Ok(());
     }
-    let backups = lib
-        .assets_dir()
-        .ok_or_else(|| anyhow::anyhow!("no library folder for backups"))?
-        .join("backups/kobo");
+    let backups = hoard_core::local_dir().join("backups/kobo");
     let writer = DeviceWriter::open(mount, &backups)?;
     println!(
         "Backed up the Kobo's database to {}",
@@ -686,17 +663,9 @@ fn search(library_path: &Path, text: &str, limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn import_calibre(
-    library_path: &Path,
-    calibre: &Path,
-    link: bool,
-    books_folder: Option<&Path>,
-) -> Result<()> {
+fn import_calibre(library_path: &Path, calibre: &Path, link: bool) -> Result<()> {
     use hoard_core::store::AddMode;
     let lib = Library::open(library_path)?;
-    if let Some(folder) = books_folder {
-        lib.set_books_root(folder)?;
-    }
     println!("Books folder: {}", lib.books_root()?.display());
     let mode = if link { AddMode::Link } else { AddMode::Copy };
     let started = std::time::Instant::now();

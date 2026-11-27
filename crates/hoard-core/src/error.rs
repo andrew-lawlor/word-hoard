@@ -6,6 +6,9 @@ pub enum Error {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Opening, moving or choosing a library folder.
+    #[error("{0}")]
+    Library(String),
     #[error("no Kobo database found at {0}")]
     NotAKobo(PathBuf),
     #[error(

@@ -17,9 +17,11 @@ finish-args:
   # it writes only to send books (after backing up that database).
   - --filesystem=/media
   - --filesystem=/run/media
-  # The books folder (default ~/Documents/Books). Books are added through the
-  # file chooser portal; this is only where Word Hoard keeps its copies.
-  - --filesystem=xdg-documents/Books:create
+  # The library folder: books, plus a hidden .word-hoard folder with the
+  # database and covers. ~/Documents/Books by default, but it can be any
+  # folder (a synced one, say), and SQLite needs real file access there
+  # (the document portal won't do), so Word Hoard can reach the home folder.
+  - --filesystem=home
   # Mount a plugged-in Kobo where the desktop doesn't (no gvfs, as on KDE).
   - --system-talk-name=org.freedesktop.UDisks2
   # Notice when the Kobo is plugged in, and eject it (gvfs / UDisks2).

@@ -16,4 +16,5 @@ pub mod store;
 
 pub use error::{Error, Result};
 pub use import::ImportStats;
-pub use store::{Library, default_library_path, migrate_from_kollate};
+pub use store::location::{current_library, local_dir};
+pub use store::{Library, migrate_from_kollate};

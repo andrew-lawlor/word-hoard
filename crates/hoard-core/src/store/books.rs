@@ -228,8 +228,13 @@ impl BookFacts {
 }
 
 impl Library {
-    /// The folder book files are kept in.
+    /// The folder book files are kept in: the library folder, for a library
+    /// kept the usual way (see [`super::location`]); otherwise the books
+    /// folder setting, or the default.
     pub fn books_root(&self) -> Result<PathBuf> {
+        if let Some(folder) = self.path().and_then(super::location::folder_of) {
+            return Ok(folder.to_path_buf());
+        }
         Ok(self
             .setting(BOOKS_ROOT_SETTING)?
             .map(PathBuf::from)

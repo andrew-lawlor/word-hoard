@@ -390,7 +390,7 @@ impl Window {
 
     /// (Re)opens all installed and imported dictionaries.
     pub(super) fn load_dictionaries(&self) {
-        let mut dirs = dict::search_dirs(self.lib.borrow().assets_dir().as_deref());
+        let mut dirs = dict::search_dirs(Some(&hoard_core::local_dir()));
         if cfg!(debug_assertions) {
             // Development builds use the WordNet built by scripts/fetch-wordnet.sh.
             dirs.push(PathBuf::from(concat!(

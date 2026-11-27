@@ -11,7 +11,7 @@ mod word;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use hoard_core::{Library, default_library_path};
+use hoard_core::Library;
 
 /// Development builds use a separate ID, so they run alongside an installed
 /// Word Hoard instead of handing their launch over to it.
@@ -51,11 +51,13 @@ fn main() -> glib::ExitCode {
     app.run()
 }
 
-/// The library database; `WORD_HOARD_LIBRARY` overrides it (for development).
-fn library_path() -> std::path::PathBuf {
-    std::env::var_os("WORD_HOARD_LIBRARY")
-        .map(Into::into)
-        .unwrap_or_else(default_library_path)
+/// The library database: the open library folder's (see
+/// `hoard_core::store::location`); `WORD_HOARD_LIBRARY` overrides it.
+fn library_path() -> hoard_core::Result<std::path::PathBuf> {
+    match std::env::var_os("WORD_HOARD_LIBRARY") {
+        Some(path) => Ok(path.into()),
+        None => hoard_core::current_library(),
+    }
 }
 
 fn load_css() {
@@ -84,15 +86,16 @@ fn activate(app: &adw::Application) {
     app.add_action(&quit);
 
     let path = library_path();
-    match Library::open(&path) {
+    let opened = path
+        .as_ref()
+        .map_err(|e| e.to_string())
+        .and_then(|path| Library::open(path).map_err(|e| format!("{}\n\n{e}", path.display())));
+    match opened {
         Ok(library) => window::Window::new(app, library).present(),
         Err(err) => {
             let win = adw::ApplicationWindow::builder().application(app).build();
             win.present();
-            let dialog = adw::AlertDialog::new(
-                Some("Couldn’t Open Library"),
-                Some(&format!("{}\n\n{err}", path.display())),
-            );
+            let dialog = adw::AlertDialog::new(Some("Couldn’t Open Library"), Some(&err));
             dialog.add_response("close", "Close");
             dialog.connect_response(None, move |_, _| win.close());
             dialog.present(None::<&gtk::Widget>);

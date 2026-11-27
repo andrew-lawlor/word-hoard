@@ -200,7 +200,11 @@ Pick a model in *Preferences → Handwriting*: **Qwen3-VL 2B** (2.7 GB, recommen
 
 From a terminal: `word-hoard-cli models` lists the models, `word-hoard-cli models add FILES…` adds them, and `word-hoard-cli transcribe` reads what's waiting.
 
-Your library lives in `~/.local/share/word-hoard/`, or `~/.var/app/io.github.andrew_lawlor.WordHoard/data/word-hoard/` for the Flatpak.
+Your library is one folder, `~/Documents/Books` unless you choose another in Preferences: your books, in `Author/Title (Year)/` folders, and a hidden `.word-hoard` folder with the database, covers and markup images. Back it up, move it or sync it as a whole. In Preferences you can also open a library in another folder, start a new one, or move this one.
+
+What belongs to this computer stays in `~/.local/share/word-hoard/` (`~/.var/app/io.github.andrew_lawlor.WordHoard/data/word-hoard/` for the Flatpak): Kobo database backups, handwriting models, dictionaries you add, and which library folder is open.
+
+If you sync the library folder, open it on one computer at a time: the database is SQLite, and two copies changing at once can't be merged.
 
 ### Command line
 

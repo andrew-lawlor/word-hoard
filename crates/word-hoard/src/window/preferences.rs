@@ -7,6 +7,7 @@ impl Window {
         let dialog = adw::PreferencesDialog::new();
         self.track_dialog(&dialog);
         let page = adw::PreferencesPage::new();
+        page.add(&self.library_group(&dialog));
         let group = adw::PreferencesGroup::builder()
             .title("Kobo")
             .description("Word Hoard reads from a copy of your Kobo’s database. It writes to the Kobo only when you send it books, after backing up its database.")
@@ -90,16 +91,6 @@ impl Window {
             page.add(&group);
         }
 
-        if let Some(dir) = self.lib.borrow().assets_dir() {
-            let location = adw::ActionRow::builder()
-                .title("Library Location")
-                .subtitle(dir.display().to_string())
-                .subtitle_selectable(true)
-                .build();
-            let library = adw::PreferencesGroup::builder().title("Library").build();
-            library.add(&location);
-            page.add(&library);
-        }
         dialog.add(&page);
         dialog.present(Some(&self.win));
     }
@@ -117,7 +108,7 @@ impl Window {
                  before the included one. Everything stays on this computer.",
             )
             .build();
-        let user_dir = self.lib.borrow().assets_dir().map(|d| dict::user_dir(&d));
+        let user_dir = Some(dict::user_dir(&hoard_core::local_dir()));
         let add = gtk::Button::builder()
             .icon_name("list-add-symbolic")
             .tooltip_text("Add a dictionary (DictFile .df.bz2, StarDict .ifo or kaikki.org .jsonl)")
@@ -324,9 +315,7 @@ impl Window {
     }
 
     fn add_dictionary(self: &Rc<Self>, prefs: &adw::PreferencesDialog) {
-        let Some(user_dir) = self.lib.borrow().assets_dir().map(|d| dict::user_dir(&d)) else {
-            return;
-        };
+        let user_dir = dict::user_dir(&hoard_core::local_dir());
         let filter = gtk::FileFilter::new();
         filter.set_name(Some("Dictionaries"));
         for pattern in [
