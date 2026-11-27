@@ -385,7 +385,20 @@ pub(crate) fn strip_tags(html: &str) -> String {
         rest = &rest[start + end + 1..];
     }
     out.push_str(rest);
-    decode_entities(&out)
+    // A paragraph's closing and the next one's opening tag each made a line
+    // break: one blank line between paragraphs is enough.
+    let decoded = decode_entities(&out);
+    let mut text = String::with_capacity(decoded.len());
+    let mut blank_run = 0;
+    for line in decoded.split('\n') {
+        let blank = line.trim().is_empty();
+        blank_run = if blank { blank_run + 1 } else { 0 };
+        if blank_run <= 1 {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text
 }
 
 /// Decodes the HTML entities left in a description once its tags are gone

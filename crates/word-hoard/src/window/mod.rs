@@ -308,11 +308,16 @@ impl Window {
         add_books.update_property(&[gtk::accessible::Property::Label("Add Books")]);
         header.pack_start(&add_books);
         let send_button = gtk::Button::builder()
-            .icon_name("document-send-symbolic")
+            .child(
+                &adw::ButtonContent::builder()
+                    .icon_name("document-send-symbolic")
+                    .label("Send to Kobo")
+                    .build(),
+            )
             .action_name("win.send-book")
+            .css_classes(["suggested-action"])
             .visible(false)
             .build();
-        send_button.update_property(&[gtk::accessible::Property::Label("Send to Kobo")]);
         header.pack_end(&send_button);
         let book_sort = gtk::DropDown::from_strings(&["Recent", "Title", "Author"]);
         book_sort.set_tooltip_text(Some("Sort books"));
@@ -516,7 +521,12 @@ impl Window {
                 .ok()
                 .and_then(|v| v.strip_prefix("book:")?.parse().ok())
         {
-            self.navigate(Nav::Annotations(View::Book(id)), true);
+            // After start-up settles (a connected Kobo's banner and the
+            // sidebar's first selection would otherwise win).
+            let this = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+                this.navigate(Nav::Annotations(View::Book(id)), true);
+            });
         }
         // Handwriting still waiting for the chosen model.
         self.transcribe_pending();

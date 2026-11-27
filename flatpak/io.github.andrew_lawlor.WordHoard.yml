@@ -20,6 +20,8 @@ finish-args:
   # The books folder (default ~/Documents/Books). Books are added through the
   # file chooser portal; this is only where Word Hoard keeps its copies.
   - --filesystem=xdg-documents/Books:create
+  # Mount a plugged-in Kobo where the desktop doesn't (no gvfs, as on KDE).
+  - --system-talk-name=org.freedesktop.UDisks2
   # Notice when the Kobo is plugged in, and eject it (gvfs / UDisks2).
   - --talk-name=org.gtk.vfs.*
   - --filesystem=xdg-run/gvfsd

@@ -186,6 +186,22 @@ impl Window {
             }
         });
 
+        // A Kobo that's plugged in but not mounted (KDE, for one, doesn't
+        // mount drives until they're opened) is mounted here, as the desktop
+        // would, so it can be imported from and sent to.
+        let weak = Rc::downgrade(self);
+        self.monitor.connect_volume_added(move |_, volume| {
+            if let Some(this) = weak.upgrade() {
+                this.mount_kobo_volume(volume);
+            }
+        });
+        for volume in self.monitor.volumes() {
+            self.mount_kobo_volume(&volume);
+        }
+        // Without gvfs (KDE, for one) GIO doesn't see unmounted drives at
+        // all, so UDisks2 is asked directly as well.
+        self.watch_udisks();
+
         let weak = Rc::downgrade(self);
         self.monitor.connect_mount_added(move |_, mount| {
             if let Some(this) = weak.upgrade() {
@@ -210,6 +226,68 @@ impl Window {
         for mount in self.monitor.mounts() {
             self.mount_added(&mount);
         }
+    }
+
+    /// Mounts `volume` if it's an unmounted Kobo (every Kobo's storage is
+    /// labelled KOBOeReader). Mounting it reports it through `mount_added`.
+    fn mount_kobo_volume(self: &Rc<Self>, volume: &gio::Volume) {
+        if volume.get_mount().is_some() {
+            return;
+        }
+        let label = volume
+            .identifier(gio::VOLUME_IDENTIFIER_KIND_LABEL)
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| volume.name().to_string());
+        if !label.eq_ignore_ascii_case("KOBOeReader") {
+            return;
+        }
+        let this = self.clone();
+        let volume = volume.clone();
+        glib::spawn_future_local(async move {
+            if let Err(err) = volume
+                .mount_future(gio::MountMountFlags::NONE, None::<&gio::MountOperation>)
+                .await
+            {
+                eprintln!("word-hoard: couldn’t mount the Kobo: {err}");
+                this.toast("Your Kobo is plugged in, but couldn’t be opened. Open it in your file manager.");
+            }
+        });
+    }
+
+    /// Mounts unmounted Kobos through UDisks2, now and whenever a drive is
+    /// added. Mounting one reports it through `mount_added`.
+    fn watch_udisks(self: &Rc<Self>) {
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(bus) = gio::bus_get_future(gio::BusType::System).await else {
+                return;
+            };
+            mount_udisks_kobos(&bus).await;
+            let weak = Rc::downgrade(&this);
+            let subscription = bus.subscribe_to_signal(
+                Some("org.freedesktop.UDisks2"),
+                Some("org.freedesktop.DBus.ObjectManager"),
+                Some("InterfacesAdded"),
+                Some("/org/freedesktop/UDisks2"),
+                None,
+                gio::DBusSignalFlags::NONE,
+                move |signal| {
+                    if weak.upgrade().is_none() {
+                        return;
+                    }
+                    let bus = signal.connection.clone();
+                    glib::spawn_future_local(async move {
+                        // Give the new drive a moment to be probed for its label.
+                        glib::timeout_future(std::time::Duration::from_millis(500)).await;
+                        mount_udisks_kobos(&bus).await;
+                    });
+                },
+            );
+            // Keep watching for as long as the window is open.
+            this.win.connect_destroy(move |_| {
+                let _ = &subscription;
+            });
+        });
     }
 
     fn mount_added(self: &Rc<Self>, mount: &gio::Mount) {
@@ -343,6 +421,70 @@ fn import_summary(s: &ImportStats) -> (String, Option<(&'static str, View)>) {
         None
     };
     (title, target)
+}
+
+/// Asks UDisks2 to mount every filesystem labelled KOBOeReader that isn't
+/// mounted yet (as the desktop would, read-write under /run/media).
+async fn mount_udisks_kobos(bus: &gio::DBusConnection) {
+    const UDISKS: &str = "org.freedesktop.UDisks2";
+    let Ok(reply) = bus
+        .call_future(
+            Some(UDISKS),
+            "/org/freedesktop/UDisks2",
+            "org.freedesktop.DBus.ObjectManager",
+            "GetManagedObjects",
+            None,
+            Some(glib::VariantTy::new("(a{oa{sa{sv}}})").expect("valid type")),
+            gio::DBusCallFlags::NONE,
+            5000,
+        )
+        .await
+    else {
+        return;
+    };
+    let objects = reply.child_value(0);
+    for i in 0..objects.n_children() {
+        let entry = objects.child_value(i);
+        let Some(path) = entry.child_value(0).str().map(str::to_owned) else {
+            continue;
+        };
+        // a{sa{sv}}: each interface's properties.
+        let interfaces = entry.child_value(1);
+        let properties = |name: &str| -> Option<glib::VariantDict> {
+            (0..interfaces.n_children())
+                .map(|j| interfaces.child_value(j))
+                .find(|i| i.child_value(0).str() == Some(name))
+                .map(|i| glib::VariantDict::new(Some(&i.child_value(1))))
+        };
+        let label = properties("org.freedesktop.UDisks2.Block")
+            .and_then(|block| block.lookup_value("IdLabel", None))
+            .and_then(|l| l.str().map(str::to_owned));
+        let Some(filesystem) = properties("org.freedesktop.UDisks2.Filesystem") else {
+            continue;
+        };
+        let mounted = filesystem
+            .lookup_value("MountPoints", None)
+            .is_some_and(|m| m.n_children() > 0);
+        if mounted || !label.is_some_and(|l| l.eq_ignore_ascii_case("KOBOeReader")) {
+            continue;
+        }
+        let options = glib::VariantDict::new(None).end();
+        if let Err(err) = bus
+            .call_future(
+                Some(UDISKS),
+                &path,
+                "org.freedesktop.UDisks2.Filesystem",
+                "Mount",
+                Some(&glib::Variant::tuple_from_iter([options])),
+                Some(glib::VariantTy::new("(s)").expect("valid type")),
+                gio::DBusCallFlags::NONE,
+                30000,
+            )
+            .await
+        {
+            eprintln!("word-hoard: couldn’t mount the Kobo through UDisks2: {err}");
+        }
+    }
 }
 
 #[cfg(test)]
