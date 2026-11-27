@@ -4,6 +4,7 @@ pub mod assets;
 pub mod chapters;
 pub mod device;
 pub mod epub;
+pub mod kepub;
 pub mod model;
 pub mod notebook;
 pub mod qvariant;
