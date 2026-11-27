@@ -28,7 +28,7 @@ depends = "$auto"
 extended-description = """\
 Word Hoard imports highlights, notes, handwritten markups and looked-up words \
 from a Kobo e-reader connected over USB, in its own reader or in KOReader, \
-without writing to the device \
+reading only a copy of its database \
 and without duplicates. Curate them in a GTK/libadwaita app, see each word's \
 context sentence and an offline Wiktionary definition, and export to Obsidian, \
 Anki, JSON, CSV or Readwise."""

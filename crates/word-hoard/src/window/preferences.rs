@@ -9,7 +9,7 @@ impl Window {
         let page = adw::PreferencesPage::new();
         let group = adw::PreferencesGroup::builder()
             .title("Kobo")
-            .description("Word Hoard only ever reads from your Kobo. Nothing on it is changed.")
+            .description("Word Hoard reads from a copy of your Kobo’s database. It writes to the Kobo only when you send it books, after backing up its database.")
             .build();
         let on_connect = adw::ComboRow::builder()
             .title("When a Kobo Is Connected")

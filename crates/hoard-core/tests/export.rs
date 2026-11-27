@@ -238,7 +238,7 @@ fn nothing_can_be_written_to_a_kobo() {
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("Word Hoard never writes to your Kobo"),
+        err.contains("Word Hoard doesn't save files onto your Kobo"),
         "{err}"
     );
 

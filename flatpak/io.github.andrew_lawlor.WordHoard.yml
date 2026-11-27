@@ -13,9 +13,10 @@ finish-args:
   - --socket=fallback-x11
   - --device=dri
   # --device=dri also lets handwriting transcription use the GPU (Vulkan).
-  # Kobo e-readers mount here. Read-only: Word Hoard never writes to the device.
-  - --filesystem=/media:ro
-  - --filesystem=/run/media:ro
+  # Kobo e-readers mount here. Word Hoard reads a copy of the Kobo's database;
+  # it writes only to send books (after backing up that database).
+  - --filesystem=/media
+  - --filesystem=/run/media
   # The books folder (default ~/Documents/Books). Books are added through the
   # file chooser portal; this is only where Word Hoard keeps its copies.
   - --filesystem=xdg-documents/Books:create

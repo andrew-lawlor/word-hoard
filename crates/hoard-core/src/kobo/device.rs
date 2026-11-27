@@ -43,9 +43,10 @@ pub fn kobo_root_containing(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// Word Hoard never writes to a Kobo. Every place that creates or changes a
-/// file calls this first, so no export, library or dictionary path can be
-/// on the device, even if the user picks one.
+/// Nothing but sending books writes to a Kobo. Every place that creates or
+/// changes a file calls this first, so no export, library or dictionary path
+/// can be on the device, even if the user picks one. Sending books goes
+/// through [`super::writer::DeviceWriter`] instead.
 pub fn ensure_not_on_kobo(path: &Path) -> Result<()> {
     match kobo_root_containing(path) {
         Some(_) => Err(Error::OnKobo(path.to_path_buf())),

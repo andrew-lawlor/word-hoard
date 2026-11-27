@@ -50,7 +50,7 @@ print(f"""## What's new
 
 | File | For |
 |---|---|
-| `word-hoard.flatpak` | Any distribution: `flatpak install --user word-hoard.flatpak`. Read-only access to your Kobo, no network. |
+| `word-hoard.flatpak` | Any distribution: `flatpak install --user word-hoard.flatpak`. Access to your Kobo (written to only when you send books), no network. |
 | `{deb}` | Debian 13 or Ubuntu 24.04 and newer: `sudo apt install ./{deb}` |
 | `SHA256SUMS` | Checksums |
 

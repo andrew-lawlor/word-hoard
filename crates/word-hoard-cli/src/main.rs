@@ -42,7 +42,7 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Import highlights, notes and vocab into the library. Never writes to the Kobo.
+    /// Import highlights, notes and vocab into the library. Only reads from the Kobo.
     Import {
         /// Kobo mount point or KoboReader.sqlite file.
         path: PathBuf,

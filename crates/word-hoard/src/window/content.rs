@@ -64,6 +64,7 @@ impl Window {
         self.book_sort.set_visible(nav == Nav::Library);
         self.add_books_button.set_visible(nav == Nav::Library);
         self.library.toggles.set_visible(nav == Nav::Library);
+        self.update_send_button();
         self.search.set_placeholder_text(Some(match nav {
             Nav::Library => "Search books by title or author",
             Nav::Vocab => "Search words, definitions and sentences",

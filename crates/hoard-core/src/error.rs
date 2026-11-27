@@ -9,7 +9,7 @@ pub enum Error {
     #[error("no Kobo database found at {0}")]
     NotAKobo(PathBuf),
     #[error(
-        "{0} is on a Kobo e-reader. Word Hoard never writes to your Kobo; choose a location on this computer instead."
+        "{0} is on a Kobo e-reader. Word Hoard doesn't save files onto your Kobo; choose a location on this computer instead."
     )]
     OnKobo(PathBuf),
     #[error("{0} is mounted read-only; mount your Kobo normally to send books to it")]

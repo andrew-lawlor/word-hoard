@@ -1,6 +1,6 @@
 # Word Hoard user guide
 
-For Word Hoard 0.7.1. Word Hoard brings everything you mark on a Kobo e-reader, in its own reader or in KOReader — highlights, notes, stylus markups, notebooks and Vocabulary Builder words — into a library on your computer, where you can triage it, correct it, read your handwriting as text, and export it to Obsidian, Anki and more. It never writes to your Kobo and never goes online.
+For Word Hoard 0.7.1. Word Hoard brings everything you mark on a Kobo e-reader, in its own reader or in KOReader — highlights, notes, stylus markups, notebooks and Vocabulary Builder words — into a library on your computer, where you can triage it, correct it, read your handwriting as text, and export it to Obsidian, Anki and more. It writes to your Kobo only when you send it books, and never goes online.
 
 **Contents**
 
@@ -377,7 +377,7 @@ It holds `library.db` (everything you've imported and edited), copied covers and
 
 **Privacy.** Everything stays on your computer. Word Hoard has no accounts, no analytics and, in the Flatpak, no network access. Handwriting is read by a model running on your computer.
 
-**Your Kobo.** Word Hoard only ever reads from it. It copies the Kobo's database before reading, never writes a file to the device, and refuses to save exports or its library there even if you choose it.
+**Your Kobo.** Word Hoard reads from a copy of the Kobo's database. It writes to the Kobo only when you send it books: it backs up the Kobo's database first, then copies the book files, and changes nothing else. It refuses to save exports or its library there even if you choose it.
 
 **Removing Word Hoard.** Uninstall the package, then delete the library folder above if you want your data gone too.
 

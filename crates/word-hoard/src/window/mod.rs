@@ -207,6 +207,7 @@ pub struct Window {
     books_shown: Cell<usize>,
     book_sort: gtk::DropDown,
     add_books_button: gtk::Button,
+    send_button: gtk::Button,
     back: gtk::Button,
     /// The current book was opened from the Books page (Back returns there).
     from_books: Cell<bool>,
@@ -306,6 +307,13 @@ impl Window {
             .build();
         add_books.update_property(&[gtk::accessible::Property::Label("Add Books")]);
         header.pack_start(&add_books);
+        let send_button = gtk::Button::builder()
+            .icon_name("document-send-symbolic")
+            .action_name("win.send-book")
+            .visible(false)
+            .build();
+        send_button.update_property(&[gtk::accessible::Property::Label("Send to Kobo")]);
+        header.pack_end(&send_button);
         let book_sort = gtk::DropDown::from_strings(&["Recent", "Title", "Author"]);
         book_sort.set_tooltip_text(Some("Sort books"));
         book_sort.update_property(&[gtk::accessible::Property::Label("Sort books")]);
@@ -472,6 +480,7 @@ impl Window {
             books_shown: Cell::new(0),
             book_sort,
             add_books_button: add_books,
+            send_button,
             back,
             from_books: Cell::new(false),
             recent_ids: RefCell::default(),
@@ -855,5 +864,6 @@ impl Window {
         self.add_win_action("shortcuts", |this| shortcuts::present(&this.win));
         self.add_win_action("add-books", |this| this.add_books());
         self.add_win_action("import-calibre", |this| this.import_calibre());
+        self.add_win_action("send-book", |this| this.send_current_book());
     }
 }

@@ -163,4 +163,102 @@ impl Window {
             }
         });
     }
+
+    /// Shows Send to Kobo on a book's page while a Kobo is connected.
+    pub(super) fn update_send_button(&self) {
+        let on_book = matches!(self.current.get(), Nav::Annotations(View::Book(_)));
+        self.send_button
+            .set_visible(on_book && self.kobo.borrow().is_some());
+        self.send_button
+            .set_tooltip_text(Some(&format!("Send to Your {}", self.kobo_name())));
+    }
+
+    /// Sends the book on screen to the connected Kobo, after showing what
+    /// will be written and asking.
+    pub(super) fn send_current_book(self: &Rc<Self>) {
+        let Nav::Annotations(View::Book(id)) = self.current.get() else {
+            return;
+        };
+        let Some(root) = self.kobo.borrow().as_ref().map(|k| k.root.clone()) else {
+            return self.error(
+                "No Kobo Connected",
+                "Connect your Kobo with a USB cable to send books to it.",
+            );
+        };
+        let plan = match self.lib.borrow().plan_send(&root, &[id]) {
+            Ok(plan) => plan,
+            Err(err) => return self.error("Couldn’t Send the Book", err),
+        };
+        let name = self.kobo_name();
+        let Some(item) = plan.items.first().cloned() else {
+            let reason = plan
+                .skipped
+                .first()
+                .map_or("nothing to send", |s| s.reason.as_str());
+            return self.toast(&format!("Not sent: {reason}"));
+        };
+        let how = match item.action {
+            hoard_core::store::send::SendAction::Convert => "converted for the Kobo and copied",
+            hoard_core::store::send::SendAction::Copy => "copied",
+        };
+        let dialog = adw::AlertDialog::new(
+            Some(&format!("Send to Your {name}?")),
+            Some(&format!(
+                "“{}” will be {how} to {} ({}). Word Hoard backs up the Kobo’s database first and changes nothing else on it.\n\nEject the Kobo afterwards and it adds the book.",
+                item.title,
+                item.dest.display(),
+                glib::format_size(item.size)
+            )),
+        );
+        dialog.add_responses(&[("cancel", "Cancel"), ("send", "Send")]);
+        dialog.set_response_appearance("send", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("send"));
+        dialog.set_close_response("cancel");
+        let this = self.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "send" {
+                return;
+            }
+            let Some(db) = this.lib.borrow().path().map(Path::to_path_buf) else {
+                return;
+            };
+            let Some(backups) = this
+                .lib
+                .borrow()
+                .assets_dir()
+                .map(|d| d.join("backups/kobo"))
+            else {
+                return;
+            };
+            let (this, plan, root, title) =
+                (this.clone(), plan.clone(), root.clone(), item.title.clone());
+            this.start_progress(&format!("Sending “{title}”…"));
+            glib::spawn_future_local(async move {
+                let result = gio::spawn_blocking(move || {
+                    let lib = hoard_core::Library::open(&db)?;
+                    let writer = hoard_core::kobo::writer::DeviceWriter::open(&root, &backups)?;
+                    lib.apply_send(&writer, &plan, |_, _| {})
+                })
+                .await;
+                this.set_progress(None);
+                match result {
+                    Ok(Ok(stats)) if stats.failed.is_empty() => {
+                        this.toast(&format!("Sent “{title}”. Eject your {name} to add it."))
+                    }
+                    Ok(Ok(stats)) => this.error(
+                        "Couldn’t Send the Book",
+                        stats
+                            .failed
+                            .iter()
+                            .map(|(_, why)| why.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                    Ok(Err(err)) => this.error("Couldn’t Send the Book", err),
+                    Err(_) => this.error("Couldn’t Send the Book", "Sending stopped unexpectedly."),
+                }
+            });
+        });
+        dialog.present(Some(&self.win));
+    }
 }

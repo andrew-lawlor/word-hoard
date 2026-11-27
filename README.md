@@ -6,7 +6,7 @@
   <b>Everything you mark on your e-reader, read, sorted and put to work.</b><br>
   Highlights and notes from your Kobo, in its own reader (Nickel) or in KOReader. Word Hoard turns your margin notes<br>
   and notebooks into text, files what you star and tag with the pen, and makes flashcards from the words you look up.<br>
-  <sub>A native Linux app for GNOME and any desktop. Offline, private, and it never writes to your e-reader.</sub>
+  <sub>A native Linux app for GNOME and any desktop. Offline, private, and it writes to your e-reader only when you send it books.</sub>
 </p>
 
 <p align="center">
@@ -125,7 +125,7 @@ New highlights pile up in the **Inbox**. One key keeps, archives, stars or edits
 
 ## Private, and read-only on your e-reader
 
-- **Read-only on the device.** Word Hoard copies what it needs and never writes back, so you can eject any time. The Flatpak's sandbox enforces it.
+- **Careful with the device.** Word Hoard reads from a copy of your Kobo's database, so you can eject any time. It writes to the Kobo only when you send it books: it backs up the Kobo's database first and copies the book files, nothing else.
 - **No network.** Models and extra dictionaries come from links in Preferences, fetched in your browser. The English [Wiktionary](https://www.wiktionary.org/) ships inside, and 16 other languages are on offer.
 - **Re-importing is harmless.** A factory reset or a second Kobo won't create duplicates.
 - **Your edits outrank the device's.** Stars, tags and corrections survive every import, and a highlight deleted on the Kobo lingers in Word Hoard, flagged.

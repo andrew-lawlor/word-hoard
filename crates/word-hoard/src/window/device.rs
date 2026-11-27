@@ -140,7 +140,7 @@ impl Window {
 
     // ---- Device ------------------------------------------------------------
 
-    fn kobo_name(&self) -> &'static str {
+    pub(super) fn kobo_name(&self) -> &'static str {
         self.kobo.borrow().as_ref().map_or("Kobo", |k| k.name)
     }
 
@@ -203,6 +203,7 @@ impl Window {
                 .is_some_and(|k| Some(&k.root) == root.as_ref());
             if ours {
                 this.kobo.replace(None);
+                this.update_send_button();
                 this.banner.set_revealed(false);
             }
         });
@@ -224,6 +225,7 @@ impl Window {
             root: root.clone(),
             name,
         }));
+        self.update_send_button();
         match self.on_connect_setting() {
             OnConnect::Import => self.import_from(root),
             OnConnect::Ask => self.set_banner(
@@ -258,6 +260,7 @@ impl Window {
             match result {
                 Ok(()) => {
                     this.kobo.replace(None);
+                    this.update_send_button();
                     this.banner.set_revealed(false);
                     this.toast(&format!("You can unplug your {name}"));
                 }
