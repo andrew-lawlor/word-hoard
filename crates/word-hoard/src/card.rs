@@ -386,8 +386,9 @@ pub fn book_header(book: &Book, details: &BookDetails) -> gtk::ListBoxRow {
 /// A description shown in its first lines, with More to read all of it.
 fn description_label(description: &str) -> gtk::Widget {
     const SHORT_LINES: i32 = 5;
+    // Not selectable: a selectable label takes keyboard focus first on the
+    // page, and GTK selects all of its text when it does.
     let label = wrapped_label(description, &["body"]);
-    label.set_selectable(true);
     let long =
         description.chars().count() > 360 || description.lines().count() > SHORT_LINES as usize;
     if !long {

@@ -200,7 +200,12 @@ impl Library {
                 let file = match item.action {
                     SendAction::Convert => {
                         let kepub = work.path().join(format!("{n}.kepub.epub"));
-                        crate::kobo::kepub::convert(&item.source, &kepub)?;
+                        let cover = self.own_cover(item.book_id);
+                        crate::kobo::kepub::convert_with_cover(
+                            &item.source,
+                            &kepub,
+                            cover.as_deref(),
+                        )?;
                         kepub
                     }
                     SendAction::Copy => item.source.clone(),

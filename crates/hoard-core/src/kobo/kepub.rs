@@ -76,6 +76,14 @@ fn is_content_document(name: &str) -> bool {
 /// Converts the EPUB at `src` into a KEPUB at `dest`. Refuses DRM-locked
 /// books (their text can't be read, let alone rewritten).
 pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
+    convert_with_cover(src, dest, None)
+}
+
+/// [`convert`], putting `cover` (the library's cover for the book) in place
+/// of the image the book marks as its cover, as Calibre does when it sends a
+/// book. The image keeps its name in the book; it's re-encoded if the
+/// formats differ. A book that marks no cover keeps its own images.
+pub fn convert_with_cover(src: &Path, dest: &Path, cover: Option<&Path>) -> Result<KepubStats> {
     let mut input = zip::ZipArchive::new(std::fs::File::open(src)?).map_err(io_err)?;
     if is_drm(&mut input) {
         return Err(Error::Drm(src.to_path_buf()));
@@ -92,6 +100,18 @@ pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
     output.write_all(b"application/epub+zip")?;
 
     let opf_path = package_path(&mut input);
+    // Where the book's cover image is, when there's a library cover to put there.
+    let cover_entry = match (cover, &opf_path) {
+        (Some(_), Some(opf_path)) => {
+            let mut opf = String::new();
+            input
+                .by_name(opf_path)
+                .map_err(io_err)?
+                .read_to_string(&mut opf)?;
+            cover_href(&opf).map(|href| crate::kobo::epub::join_zip_path(opf_path, &href))
+        }
+        _ => None,
+    };
     let mut stats = KepubStats::default();
     for i in 0..input.len() {
         let mut entry = input.by_index(i).map_err(io_err)?;
@@ -102,7 +122,11 @@ pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
         let mut bytes = Vec::with_capacity(entry.size() as usize);
         entry.read_to_end(&mut bytes)?;
         drop(entry);
-        if Some(name.as_str()) == opf_path.as_deref() {
+        if let (Some(cover), Some(entry)) = (cover, &cover_entry)
+            && *entry == name
+        {
+            bytes = cover_as(cover, &name)?;
+        } else if Some(name.as_str()) == opf_path.as_deref() {
             if let Some(fixed) = mark_cover_image(&String::from_utf8_lossy(&bytes)) {
                 bytes = fixed.into_bytes();
             }
@@ -223,6 +247,62 @@ fn with_cover_property(e: &BytesStart) -> BytesStart<'static> {
         out.push_attribute(("properties", "cover-image"));
     }
     out
+}
+
+/// The href of the book's cover image: the item marked `cover-image`, else
+/// the one EPUB 2's `<meta name="cover">` names.
+pub(crate) fn cover_href(opf: &str) -> Option<String> {
+    let mut reader = Reader::from_str(opf);
+    let (mut marked, mut meta_id) = (None, None);
+    let mut items: Vec<(String, String)> = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+                "item" => {
+                    let attr = |n| crate::kobo::epub::attr(&e, n);
+                    let (Some(id), Some(href)) = (attr("id"), attr("href")) else {
+                        continue;
+                    };
+                    if attr("properties")
+                        .is_some_and(|p| p.split_whitespace().any(|p| p == "cover-image"))
+                    {
+                        marked = Some(href.clone());
+                    }
+                    items.push((id, href));
+                }
+                "meta" if crate::kobo::epub::attr(&e, "name").as_deref() == Some("cover") => {
+                    meta_id = crate::kobo::epub::attr(&e, "content");
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    marked.or_else(|| {
+        let id = meta_id?;
+        items.into_iter().find(|(i, _)| *i == id).map(|(_, h)| h)
+    })
+}
+
+/// The image at `cover`, in the format the book's file `name` is in.
+fn cover_as(cover: &Path, name: &str) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(cover)?;
+    let lower = name.to_ascii_lowercase();
+    let want = if lower.ends_with(".png") {
+        image::ImageFormat::Png
+    } else {
+        image::ImageFormat::Jpeg
+    };
+    if image::guess_format(&bytes).ok() == Some(want) {
+        return Ok(bytes);
+    }
+    let decoded = image::load_from_memory(&bytes).map_err(io_err)?;
+    // JPEG has no alpha channel.
+    let decoded = image::DynamicImage::ImageRgb8(decoded.to_rgb8());
+    let mut out = std::io::Cursor::new(Vec::new());
+    decoded.write_to(&mut out, want).map_err(io_err)?;
+    Ok(out.into_inner())
 }
 
 /// One run of text being gathered across text, entity and CDATA events.
@@ -567,6 +647,73 @@ mod tests {
                 .unwrap()
                 .contains(r#"properties="svg cover-image""#)
         );
+    }
+
+    #[test]
+    fn puts_the_library_cover_in_place_of_the_books_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("book.epub");
+        // A tiny JPEG as the book's own (placeholder) cover.
+        let jpeg = |w, h, shade: u8| {
+            let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                w,
+                h,
+                image::Rgb([shade; 3]),
+            ));
+            let mut out = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut out, image::ImageFormat::Jpeg).unwrap();
+            out.into_inner()
+        };
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&src).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+            zip.start_file("OEBPS/content.opf", opts).unwrap();
+            zip.write_all(br#"<package version="2.0"><metadata><meta name="cover" content="c"/></metadata><manifest><item id="t" href="thumb.jpg" media-type="image/jpeg"/><item id="c" href="images/cover.jpg" media-type="image/jpeg"/></manifest></package>"#).unwrap();
+            zip.start_file("OEBPS/images/cover.jpg", opts).unwrap();
+            zip.write_all(&jpeg(10, 15, 0)).unwrap();
+            zip.start_file("OEBPS/thumb.jpg", opts).unwrap();
+            zip.write_all(&jpeg(4, 6, 0)).unwrap();
+            zip.finish().unwrap();
+        }
+        // The library's cover is a PNG; the book's slot is a JPEG.
+        let library_cover = dir.path().join("book-1.png");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(40, 60, image::Rgb([200; 3])))
+            .save(&library_cover)
+            .unwrap();
+        let dest = dir.path().join("book.kepub.epub");
+        convert_with_cover(&src, &dest, Some(&library_cover)).unwrap();
+
+        let mut out = zip::ZipArchive::new(std::fs::File::open(&dest).unwrap()).unwrap();
+        let mut cover = Vec::new();
+        out.by_name("OEBPS/images/cover.jpg")
+            .unwrap()
+            .read_to_end(&mut cover)
+            .unwrap();
+        assert_eq!(
+            image::guess_format(&cover).unwrap(),
+            image::ImageFormat::Jpeg
+        );
+        let img = image::load_from_memory(&cover).unwrap();
+        assert_eq!((img.width(), img.height()), (40, 60), "the library's cover");
+        let mut thumb = Vec::new();
+        out.by_name("OEBPS/thumb.jpg")
+            .unwrap()
+            .read_to_end(&mut thumb)
+            .unwrap();
+        assert_eq!(
+            image::load_from_memory(&thumb).unwrap().width(),
+            4,
+            "other images untouched"
+        );
+        // And the cover is marked for the Kobo.
+        let mut opf = String::new();
+        out.by_name("OEBPS/content.opf")
+            .unwrap()
+            .read_to_string(&mut opf)
+            .unwrap();
+        assert!(opf.contains(r#"properties="cover-image""#));
     }
 
     #[test]
