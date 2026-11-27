@@ -195,7 +195,7 @@ impl Window {
             (
                 "media-removable-symbolic",
                 "Welcome to Word Hoard",
-                "Add your EPUB books with Add Books (Ctrl+O), or connect your Kobo with a USB cable and choose Import (Ctrl+I) to bring in your highlights. Nothing on the Kobo is ever changed.",
+                "Add your EPUB books with Add Books (Ctrl+O), or connect your Kobo with a USB cable and choose Import (Ctrl+I) to bring in your highlights. Word Hoard writes to the Kobo only when you send it books.",
             )
         } else {
             match self.current.get() {
