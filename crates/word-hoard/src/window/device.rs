@@ -332,9 +332,12 @@ impl Window {
         glib::spawn_future_local(async move {
             // UDisks2 first: GIO without gvfs runs `umount`, which a Flatpak
             // doesn't have.
+            // UDisks2's own error is shown when it fails; GIO is only tried
+            // when UDisks2 can't be reached or doesn't know the mount.
             let result = match udisks_eject(&root).await {
-                Ok(true) => Ok(()),
-                Ok(false) | Err(_) => this.gio_eject(&mount).await,
+                Ok(Some(())) => Ok(()),
+                Ok(None) => this.gio_eject(&mount).await,
+                Err(err) => Err(err),
             };
             match result {
                 Ok(()) => {
@@ -559,17 +562,21 @@ async fn mount_udisks_kobos(bus: &gio::DBusConnection) {
 }
 
 /// Ejects the drive mounted at `root` through UDisks2: unmounts it, then
-/// powers it off so the Kobo knows it's free. `Ok(false)` when UDisks2
-/// doesn't know the mount (then GIO is tried instead).
-async fn udisks_eject(root: &std::path::Path) -> Result<bool, glib::Error> {
-    let bus = gio::bus_get_future(gio::BusType::System).await?;
+/// powers it off so the Kobo knows it's free. `Ok(None)` when UDisks2 can't
+/// be reached or doesn't know the mount (then GIO is tried instead).
+async fn udisks_eject(root: &std::path::Path) -> Result<Option<()>, glib::Error> {
+    let Ok(bus) = gio::bus_get_future(gio::BusType::System).await else {
+        return Ok(None);
+    };
     let target = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let Some(fs) = udisks_filesystems(&bus)
-        .await?
+    let Ok(filesystems) = udisks_filesystems(&bus).await else {
+        return Ok(None);
+    };
+    let Some(fs) = filesystems
         .into_iter()
         .find(|fs| fs.mount_points.iter().any(|m| *m == target || m == root))
     else {
-        return Ok(false);
+        return Ok(None);
     };
     udisks_call(
         &bus,
@@ -586,7 +593,7 @@ async fn udisks_eject(root: &std::path::Path) -> Result<bool, glib::Error> {
             eprintln!("word-hoard: couldn’t power off the Kobo: {err}");
         }
     }
-    Ok(true)
+    Ok(Some(()))
 }
 
 #[cfg(test)]
