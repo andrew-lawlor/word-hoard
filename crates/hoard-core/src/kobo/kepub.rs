@@ -336,9 +336,7 @@ pub(crate) fn convert_document(xhtml: &str) -> Result<(String, usize)> {
                         if BLOCKS.contains(&name.as_str()) {
                             new_para = true;
                         }
-                        if skip_depth > 0 {
-                            skip_depth -= 1;
-                        }
+                        skip_depth = skip_depth.saturating_sub(1);
                         stack.pop();
                         writer.write_event(Event::End(e))?;
                     }
