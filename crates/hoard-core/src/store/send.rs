@@ -14,6 +14,9 @@ use crate::kobo::DeviceInfo;
 use crate::kobo::writer::DeviceWriter;
 use crate::{Error, Result};
 
+/// Why a book already on the Kobo isn't sent (unless replacing).
+pub const ALREADY_ON_KOBO: &str = "already on this Kobo";
+
 /// Setting: the folder on the Kobo books are sent into (default `Books`).
 pub const KOBO_FOLDER_SETTING: &str = "kobo_books_folder";
 
@@ -128,7 +131,7 @@ impl Library {
                 .map(PathBuf::from)
                 .find(|rel| mount.join(rel).is_file());
             if on_device && !(replace && existing.is_some()) {
-                plan.skipped.push(skip("already on this Kobo"));
+                plan.skipped.push(skip(ALREADY_ON_KOBO));
                 continue;
             }
             let files = self.book_files(id)?;
@@ -219,18 +222,28 @@ impl Library {
         let device_id = self.upsert_device(writer.device())?;
         for (n, item) in plan.items.iter().enumerate() {
             let sent = (|| -> Result<()> {
-                let file = match item.action {
-                    SendAction::Convert => {
-                        let kepub = work.path().join(format!("{n}.kepub.epub"));
-                        let cover = self.own_cover(item.book_id);
-                        crate::kobo::kepub::convert_with_cover(
-                            &item.source,
-                            &kepub,
-                            cover.as_deref(),
-                        )?;
-                        kepub
-                    }
-                    SendAction::Copy => item.source.clone(),
+                // EPUBs and KEPUBs go with the library's cover and details;
+                // PDFs as they are.
+                let is_pdf = item
+                    .source
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+                let file = if is_pdf {
+                    item.source.clone()
+                } else {
+                    let kepub = work.path().join(format!("{n}.kepub.epub"));
+                    let cover = self.own_cover(item.book_id);
+                    let metadata = self.send_metadata(item.book_id)?;
+                    crate::kobo::kepub::kobo_copy(
+                        &item.source,
+                        &kepub,
+                        &crate::kobo::kepub::KoboCopy {
+                            cover: cover.as_deref(),
+                            metadata: Some(&metadata),
+                            already_kepub: item.action == SendAction::Copy,
+                        },
+                    )?;
+                    kepub
                 };
                 // A cover the Kobo saved for an earlier copy at this path
                 // would be shown instead of the new one.
@@ -259,6 +272,33 @@ impl Library {
             progress(n + 1, plan.items.len());
         }
         Ok(stats)
+    }
+
+    /// The library's details for a book, to write into the copy sent.
+    pub fn send_metadata(&self, book_id: i64) -> Result<crate::kobo::opf_meta::SendMetadata> {
+        let Some(book) = self.book(book_id)? else {
+            return Ok(Default::default());
+        };
+        let details = self.book_details(book_id)?;
+        let author_sort: Option<String> = self.conn.query_row(
+            "SELECT author_sort FROM book WHERE id = ?1",
+            [book_id],
+            |r| r.get(0),
+        )?;
+        let text = |s: Option<String>| s.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+        Ok(crate::kobo::opf_meta::SendMetadata {
+            title: text(Some(book.title.clone())),
+            authors: crate::kobo::opf_meta::SendMetadata::authors_from(
+                book.author.as_deref(),
+                author_sort.as_deref(),
+            ),
+            series: text(book.series.clone()),
+            series_index: text(book.series_number.clone()),
+            description: text(details.description),
+            publisher: text(book.publisher.clone()),
+            language: text(details.language),
+            published: text(details.published),
+        })
     }
 
     /// The books on the Kobo mounted at `mount`: those with a copy recorded
@@ -325,6 +365,18 @@ mod tests {
         write_epub(path, &chapter);
     }
 
+    /// The OPF of a book sent to the Kobo.
+    fn sent_opf(path: &Path) -> String {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        let name = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_owned())
+            .find(|n| n.ends_with(".opf"))
+            .unwrap();
+        let mut opf = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name(&name).unwrap(), &mut opf).unwrap();
+        opf
+    }
+
     #[test]
     fn plans_then_sends_and_remembers() {
         let dir = tempfile::tempdir().unwrap();
@@ -367,8 +419,42 @@ mod tests {
         let sent = kobo.join("Books/Frank Herbert/Dune.kepub.epub");
         let mut zip = zip::ZipArchive::new(std::fs::File::open(&sent).unwrap()).unwrap();
         assert_eq!(zip.by_index(0).unwrap().name(), "mimetype");
+        drop(zip);
 
         assert_eq!(lib.books_on_device(&kobo).unwrap(), [dune].into());
+
+        // Updating it: the library's details go into the fresh copy (the
+        // library file itself is untouched).
+        lib.conn
+            .execute(
+                "UPDATE book SET title = 'Dune (Library)', series = 'Dune Chronicles',
+                 series_number = '1.0' WHERE id = ?1",
+                [dune],
+            )
+            .unwrap();
+        let update = lib.plan_send_with(&kobo, &[dune], true).unwrap();
+        assert!(update.items[0].replace);
+        assert_eq!(
+            update.items[0].dest,
+            Path::new("Books/Frank Herbert/Dune.kepub.epub")
+        );
+        lib.apply_send(&writer, &update, |_, _| {}).unwrap();
+        let opf = sent_opf(&sent);
+        assert!(opf.contains(">Dune (Library)</dc:title>"), "{opf}");
+        assert!(opf.contains(r#"<meta name="calibre:series" content="Dune Chronicles"/>"#));
+        assert!(opf.contains(r#"<meta name="calibre:series_index" content="1"/>"#));
+        assert!(opf.contains(">Frank Herbert</dc:creator>"));
+        let library_file = &lib.book_files(dune).unwrap()[0].path;
+        let mut original = String::new();
+        std::io::Read::read_to_string(
+            &mut zip::ZipArchive::new(std::fs::File::open(library_file).unwrap())
+                .unwrap()
+                .by_name("OEBPS/content.opf")
+                .unwrap(),
+            &mut original,
+        )
+        .unwrap();
+        assert!(!original.contains("Library") && !original.contains("Chronicles"));
 
         // Remembered: the next plan skips it.
         let again = lib.plan_send(&kobo, &[dune]).unwrap();

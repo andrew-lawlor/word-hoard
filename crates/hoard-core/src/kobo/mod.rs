@@ -7,6 +7,7 @@ pub mod epub;
 pub mod kepub;
 pub mod model;
 pub mod notebook;
+pub mod opf_meta;
 pub mod qvariant;
 pub mod reader;
 pub mod writer;

@@ -238,13 +238,21 @@ impl Window {
         };
         let this = self.clone();
         glib::spawn_future_local(async move {
-            let plan = {
+            // Two plans: sending only what's new, and also updating the books
+            // already on the Kobo (offered when there are any).
+            let plans = {
                 let (db, root) = (db.clone(), root.clone());
-                gio::spawn_blocking(move || hoard_core::Library::open(&db)?.plan_send(&root, &ids))
-                    .await
+                gio::spawn_blocking(move || {
+                    let lib = hoard_core::Library::open(&db)?;
+                    Ok::<_, hoard_core::Error>((
+                        lib.plan_send(&root, &ids)?,
+                        lib.plan_send_with(&root, &ids, true)?,
+                    ))
+                })
+                .await
             };
-            let plan = match plan {
-                Ok(Ok(plan)) => plan,
+            let plan = match plans {
+                Ok(Ok(plans)) => plans,
                 Ok(Err(err)) => return this.error("Couldn’t Send to the Kobo", err),
                 Err(_) => {
                     return this.error(
@@ -253,29 +261,46 @@ impl Window {
                     );
                 }
             };
-            this.confirm_send(plan, db, root);
+            this.confirm_send(plan.0, plan.1, db, root);
         });
     }
 
+    /// Asks before sending: what goes, how, and what's left out. When some
+    /// of the books are already on the Kobo, offers to update them too
+    /// (`with_updates`): a fresh copy, with the library's cover and details,
+    /// over the one there.
     fn confirm_send(
         self: &Rc<Self>,
         plan: hoard_core::store::send::SendPlan,
+        with_updates: hoard_core::store::send::SendPlan,
         db: std::path::PathBuf,
         root: std::path::PathBuf,
     ) {
-        use hoard_core::store::send::SendAction;
+        use hoard_core::store::send::{ALREADY_ON_KOBO, SendAction};
         let name = self.kobo_name();
-        let skipped = summarize_skipped(&plan.skipped);
-        if plan.items.is_empty() {
-            return self.toast(&format!("Nothing to send: {skipped}"));
+        let updates = with_updates.items.iter().filter(|i| i.replace).count();
+        let others: Vec<_> = plan
+            .skipped
+            .iter()
+            .filter(|s| !(updates > 0 && s.reason == ALREADY_ON_KOBO))
+            .cloned()
+            .collect();
+        let skipped = summarize_skipped(&others);
+        if plan.items.is_empty() && updates == 0 {
+            return self.toast(&format!(
+                "Nothing to send: {}",
+                summarize_skipped(&plan.skipped)
+            ));
         }
+        let new = plan.items.len();
         let converted = plan
             .items
             .iter()
             .filter(|i| i.action == SendAction::Convert)
             .count();
-        let copied = plan.items.len() - converted;
+        let copied = new - converted;
         let mut body = match plan.items.as_slice() {
+            [] => String::new(),
             [one] => format!(
                 "“{}” will be {} to {}.",
                 one.title,
@@ -301,31 +326,66 @@ impl Window {
                 )
             }
         };
-        body.push_str(&format!(
-            " {} in all.",
-            glib::format_size(plan.total_size())
-        ));
-        if !plan.skipped.is_empty() {
+        if new > 0 {
+            body.push_str(&format!(
+                " {} in all.",
+                glib::format_size(plan.total_size())
+            ));
+        }
+        if updates > 0 {
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            let which = match with_updates.items.iter().find(|i| i.replace) {
+                Some(one) if updates == 1 => format!("“{}” is", one.title),
+                _ => format!("{} are", plural(updates, "book", "books")),
+            };
+            body.push_str(&format!(
+                "{which} already on your Kobo. Updating replaces {} with a fresh copy carrying your library’s cover and details. Highlights and reading position on the Kobo stay with the book.",
+                if updates == 1 { "it" } else { "them" }
+            ));
+        }
+        if !others.is_empty() {
             body.push_str(&format!("\n\nNot sent: {skipped}."));
         }
         body.push_str("\n\nWord Hoard backs up the Kobo’s database first and changes nothing else on it. Eject the Kobo afterwards and it adds the books.");
-        let heading = match plan.items.len() {
-            1 => format!("Send a Book to Your {name}?"),
-            n => format!("Send {n} Books to Your {name}?"),
+        let heading = match (new, updates) {
+            (0, 1) => format!("Update a Book on Your {name}?"),
+            (0, n) => format!("Update {n} Books on Your {name}?"),
+            (1, _) => format!("Send a Book to Your {name}?"),
+            (n, _) => format!("Send {n} Books to Your {name}?"),
         };
         let dialog = adw::AlertDialog::new(Some(&heading), Some(&body));
-        dialog.add_responses(&[("cancel", "Cancel"), ("send", "Send")]);
-        dialog.set_response_appearance("send", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("send"));
+        dialog.add_response("cancel", "Cancel");
+        let default = match (new, updates) {
+            (0, _) => {
+                dialog.add_response("update", "Update");
+                "update"
+            }
+            (_, 0) => {
+                dialog.add_response("send", "Send");
+                "send"
+            }
+            _ => {
+                dialog.add_response("update", "Send and Update");
+                dialog.add_response("send", "Send New Only");
+                "send"
+            }
+        };
+        dialog.set_response_appearance(default, adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some(default));
         dialog.set_close_response("cancel");
         let this = self.clone();
         dialog.connect_response(None, move |_, response| {
-            if response == "send" {
-                // The choice is made: leave select mode now, so more books can
-                // be chosen while these go.
-                this.set_selecting(false);
-                this.apply_send(plan.clone(), db.clone(), root.clone());
-            }
+            let chosen = match response {
+                "send" => plan.clone(),
+                "update" => with_updates.clone(),
+                _ => return,
+            };
+            // The choice is made: leave select mode now, so more books can
+            // be chosen while these go.
+            this.set_selecting(false);
+            this.apply_send(chosen, db.clone(), root.clone());
         });
         dialog.present(Some(&self.win));
     }

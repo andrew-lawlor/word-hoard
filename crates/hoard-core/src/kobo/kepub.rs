@@ -84,6 +84,32 @@ pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
 /// book. The image keeps its name in the book; it's re-encoded if the
 /// formats differ. A book that marks no cover keeps its own images.
 pub fn convert_with_cover(src: &Path, dest: &Path, cover: Option<&Path>) -> Result<KepubStats> {
+    kobo_copy(
+        src,
+        dest,
+        &KoboCopy {
+            cover,
+            ..Default::default()
+        },
+    )
+}
+
+/// How to make the copy of a book that goes to the Kobo.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KoboCopy<'a> {
+    /// The library's cover, in place of the book's own.
+    pub cover: Option<&'a Path>,
+    /// The library's details, written into the copy's OPF.
+    pub metadata: Option<&'a super::opf_meta::SendMetadata>,
+    /// Leave the text alone: the book is a KEPUB already.
+    pub already_kepub: bool,
+}
+
+/// Writes the copy of the EPUB or KEPUB at `src` that goes to the Kobo, at
+/// `dest`: converted to KEPUB (unless it is one), with the library's cover
+/// and details. `src` is only read.
+pub fn kobo_copy(src: &Path, dest: &Path, how: &KoboCopy) -> Result<KepubStats> {
+    let cover = how.cover;
     let mut input = zip::ZipArchive::new(std::fs::File::open(src)?).map_err(io_err)?;
     if is_drm(&mut input) {
         return Err(Error::Drm(src.to_path_buf()));
@@ -127,10 +153,17 @@ pub fn convert_with_cover(src: &Path, dest: &Path, cover: Option<&Path>) -> Resu
         {
             bytes = cover_as(cover, &name)?;
         } else if Some(name.as_str()) == opf_path.as_deref() {
-            if let Some(fixed) = mark_cover_image(&String::from_utf8_lossy(&bytes)) {
-                bytes = fixed.into_bytes();
+            let mut opf = String::from_utf8_lossy(&bytes).into_owned();
+            if let Some(fixed) = mark_cover_image(&opf) {
+                opf = fixed;
             }
-        } else if is_content_document(&name) {
+            if let Some(meta) = how.metadata
+                && let Some(with_details) = super::opf_meta::apply(&opf, meta)
+            {
+                opf = with_details;
+            }
+            bytes = opf.into_bytes();
+        } else if !how.already_kepub && is_content_document(&name) {
             let text = String::from_utf8_lossy(&bytes);
             let (converted, spans) = convert_document(&text)?;
             bytes = converted.into_bytes();
