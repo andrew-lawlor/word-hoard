@@ -9,6 +9,7 @@ pub mod model;
 pub mod notebook;
 pub mod qvariant;
 pub mod reader;
+pub mod writer;
 
 pub use device::{
     DeviceInfo, ensure_not_on_kobo, find_kobo_db, find_mounted_kobos, is_kobo_mount,

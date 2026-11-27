@@ -135,7 +135,7 @@ pub(crate) fn hash_file(path: &Path) -> Result<(String, u64)> {
 /// A path component safe on every filesystem a book might be copied to
 /// (FAT included): no `/ \ : * ? " < > |`, no control characters, no
 /// leading or trailing dots or spaces, at most 100 characters.
-fn safe_component(s: &str) -> String {
+pub(crate) fn safe_component(s: &str) -> String {
     let cleaned: String = s
         .chars()
         .map(|c| match c {

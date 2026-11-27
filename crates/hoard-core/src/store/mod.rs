@@ -7,6 +7,7 @@ mod pen;
 mod query;
 mod schema;
 mod search;
+pub mod send;
 mod vocab;
 
 pub use books::{

@@ -52,6 +52,21 @@ enum Command {
     },
     /// Show what the library contains.
     Library,
+    /// Send books to a Kobo (EPUBs converted to KEPUB). Shows what would be
+    /// written; nothing is written without --yes.
+    Send {
+        /// Kobo mount point (e.g. /run/media/$USER/KOBOeReader).
+        mount: PathBuf,
+        /// Books whose title, author, series or tags match these words.
+        #[arg(long)]
+        search: Option<String>,
+        /// Books by library ID (repeatable).
+        #[arg(long = "book")]
+        books: Vec<i64>,
+        /// Write to the Kobo (after backing up its database).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Search books and highlights across the library.
     Search {
         /// Words to find; the last one may be the start of a word.
@@ -186,6 +201,12 @@ fn main() -> Result<()> {
         Command::Report { path, output } => report(&path, output.as_deref()),
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
+        Command::Send {
+            mount,
+            search,
+            books,
+            yes,
+        } => send(&library_path, &mount, search.as_deref(), &books, yes),
         Command::Search { words, limit } => search(&library_path, &words.join(" "), limit),
         Command::ImportCalibre {
             path,
@@ -546,6 +567,75 @@ fn add(
     println!(
         "\n{new} new books, {attached} files for books already in the library, \
          {known} already there, {failed} failed"
+    );
+    Ok(())
+}
+
+fn send(
+    library_path: &Path,
+    mount: &Path,
+    search: Option<&str>,
+    ids: &[i64],
+    yes: bool,
+) -> Result<()> {
+    use hoard_core::kobo::writer::DeviceWriter;
+    use hoard_core::store::BookSort;
+    use hoard_core::store::send::SendAction;
+    let lib = Library::open(library_path)?;
+    let mut book_ids = ids.to_vec();
+    if let Some(q) = search {
+        book_ids.extend(
+            lib.library_books(BookSort::Title, Some(q))?
+                .into_iter()
+                .map(|b| b.id),
+        );
+    }
+    if book_ids.is_empty() {
+        anyhow::bail!("choose books with --search or --book");
+    }
+    let plan = lib.plan_send(mount, &book_ids)?;
+    for item in &plan.items {
+        let how = match item.action {
+            SendAction::Convert => "convert and send",
+            SendAction::Copy => "send",
+        };
+        println!("{how}: {} → {}", item.title, item.dest.display());
+    }
+    for s in &plan.skipped {
+        println!("skip: {} ({})", s.title, s.reason);
+    }
+    println!(
+        "\n{} books to send ({:.1} MB), {} skipped",
+        plan.items.len(),
+        plan.total_size() as f64 / 1e6,
+        plan.skipped.len()
+    );
+    if plan.items.is_empty() {
+        return Ok(());
+    }
+    if !yes {
+        println!("Nothing was written. Run again with --yes to send them.");
+        return Ok(());
+    }
+    let backups = lib
+        .assets_dir()
+        .ok_or_else(|| anyhow::anyhow!("no library folder for backups"))?
+        .join("backups/kobo");
+    let writer = DeviceWriter::open(mount, &backups)?;
+    println!(
+        "Backed up the Kobo's database to {}",
+        writer.backup().display()
+    );
+    let stats = lib.apply_send(&writer, &plan, |done, total| {
+        eprint!("\r{done} of {total}");
+    })?;
+    eprintln!();
+    for (title, why) in &stats.failed {
+        eprintln!("couldn't send {title}: {why}");
+    }
+    println!(
+        "Sent {} books ({} converted). Eject the Kobo to have it add them.",
+        stats.sent, stats.converted
     );
     Ok(())
 }

@@ -159,7 +159,7 @@ fn removable_mounts(mounts: &str) -> Vec<PathBuf> {
 }
 
 /// `/proc/mounts` writes space, tab, newline and backslash as octal (`\040`).
-fn unescape_mount(field: &str) -> String {
+pub(crate) fn unescape_mount(field: &str) -> String {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

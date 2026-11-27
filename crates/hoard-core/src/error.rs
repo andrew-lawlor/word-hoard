@@ -12,6 +12,12 @@ pub enum Error {
         "{0} is on a Kobo e-reader. Word Hoard never writes to your Kobo; choose a location on this computer instead."
     )]
     OnKobo(PathBuf),
+    #[error("{0} is mounted read-only; mount your Kobo normally to send books to it")]
+    ReadOnlyKobo(PathBuf),
+    #[error("{0} is already on the Kobo")]
+    AlreadyOnKobo(PathBuf),
+    #[error("{0} isn't a place on the Kobo where books can go")]
+    BadKoboPath(PathBuf),
     #[error("{0} is locked with DRM, so it can't be converted for the Kobo")]
     Drm(PathBuf),
     #[error("{0} isn't a Calibre library (it has no metadata.db)")]
