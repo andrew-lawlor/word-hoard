@@ -161,7 +161,6 @@ pub fn apply(opf: &str, meta: &SendMetadata) -> Option<String> {
             _ => {}
         }
     }
-    let has_opf_ns = opf.contains("xmlns:opf=");
 
     // Second pass: copy everything but the replaced elements, and write the
     // new ones before </metadata>.
@@ -217,7 +216,7 @@ pub fn apply(opf: &str, meta: &SendMetadata) -> Option<String> {
             Event::Start(e) if local(e.name().as_ref()) == "metadata" => in_metadata = true,
             Event::End(e) if local(e.name().as_ref()) == "metadata" => {
                 in_metadata = false;
-                out.push_str(&new_elements(meta, epub3, &dc_prefix, has_opf_ns));
+                out.push_str(&new_elements(meta, epub3, &dc_prefix));
             }
             _ => {}
         }
@@ -263,7 +262,30 @@ pub(crate) fn description_html(d: &str) -> String {
         .collect()
 }
 
-fn new_elements(m: &SendMetadata, epub3: bool, dc: &str, opf_ns: bool) -> String {
+const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
+const OPF_NS: &str = "http://www.idpf.org/2007/opf";
+
+/// `xml` with `xmlns:prefix="ns"` added to every `<prefix:…>` start tag.
+fn declare_prefix(xml: &str, prefix: &str, ns: &str) -> String {
+    let open = format!("<{prefix}:");
+    let decl = format!(" xmlns:{prefix}=\"{ns}\"");
+    let mut out = String::with_capacity(xml.len() + 256);
+    let mut rest = xml;
+    while let Some(i) = rest.find(&open) {
+        let tag = &rest[i..];
+        let name_end = tag[open.len()..]
+            .find([' ', '>', '/'])
+            .map_or(tag.len(), |e| e + open.len());
+        out.push_str(&rest[..i]);
+        out.push_str(&tag[..name_end]);
+        out.push_str(&decl);
+        rest = &tag[name_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn new_elements(m: &SendMetadata, epub3: bool, dc: &str) -> String {
     let mut s = String::from("  ");
     let mut push = |line: String| {
         s.push_str(&line);
@@ -291,18 +313,13 @@ fn new_elements(m: &SendMetadata, epub3: bool, dc: &str, opf_ns: bool) -> String
                     esc(sort)
                 ));
             }
-        } else if opf_ns {
+        } else {
             let file_as = sort
                 .as_ref()
                 .map(|s| format!(" opf:file-as=\"{}\"", esc(s)))
                 .unwrap_or_default();
             push(format!(
-                "<{dc}:creator id=\"{id}\" opf:role=\"aut\"{file_as}>{}</{dc}:creator>",
-                esc(name)
-            ));
-        } else {
-            push(format!(
-                "<{dc}:creator id=\"{id}\">{}</{dc}:creator>",
+                "<{dc}:creator id=\"{id}\" xmlns:opf=\"{OPF_NS}\" opf:role=\"aut\"{file_as}>{}</{dc}:creator>",
                 esc(name)
             ));
         }
@@ -347,6 +364,11 @@ fn new_elements(m: &SendMetadata, epub3: bool, dc: &str, opf_ns: bool) -> String
     if let Some(d) = &m.published {
         push(format!("<{dc}:date>{}</{dc}:date>", esc(d)));
     }
+    // Each new Dublin Core element declares its namespace itself: some
+    // books declare it on each of their own elements rather than once on
+    // <metadata>, and an undeclared prefix makes the OPF unreadable.
+    let s = declare_prefix(&s, dc, DC_NS);
+    let mut s = s;
     // Leave </metadata> where it was on its line.
     let trimmed = s.trim_end_matches([' ', '\n']).len();
     s.truncate(trimmed);
@@ -413,16 +435,16 @@ mod tests {
     fn writes_library_details_into_an_epub2_opf() {
         let out = apply(EPUB2, &meta()).unwrap();
         reparses(&out);
-        assert!(out.contains(r##"<dc:title id="wh-title">The Hammer &amp; the Cross</dc:title>"##));
+        assert!(out.contains(">The Hammer &amp; the Cross</dc:title>"));
         assert!(!out.contains("Hammer &amp; Cross (ebook)"));
         assert!(out.contains(
-            r##"<dc:creator id="wh-creator1" opf:role="aut" opf:file-as="Harrison, Harry">Harry Harrison</dc:creator>"##
+            r##"<dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/" id="wh-creator1" xmlns:opf="http://www.idpf.org/2007/opf" opf:role="aut" opf:file-as="Harrison, Harry">Harry Harrison</dc:creator>"##
         ));
         assert!(!out.contains("H. Harrison"));
         assert!(out.contains(r##"<meta name="calibre:series" content="Hammer and the Cross"/>"##));
         assert!(out.contains(r##"<meta name="calibre:series_index" content="1"/>"##));
         assert!(!out.contains("\"Old\""));
-        assert!(out.contains("<dc:description>&lt;p&gt;Vikings.&lt;/p&gt;</dc:description>"));
+        assert!(out.contains(">&lt;p&gt;Vikings.&lt;/p&gt;</dc:description>"));
         assert!(!out.contains("\n\n"), "no blank lines where elements were");
         // Left alone: identifier, language (no library value), cover, manifest.
         assert!(out.contains(r##"<dc:identifier id="uid">urn:uuid:1234</dc:identifier>"##));
@@ -458,7 +480,39 @@ mod tests {
         };
         let out = apply(EPUB2, &only_title).unwrap();
         assert!(out.contains("H. Harrison") && out.contains("content=\"Old\""));
-        assert!(out.contains(r##"<dc:title id="wh-title">New</dc:title>"##));
+        assert!(out.contains(">New</dc:title>"));
+    }
+
+    #[test]
+    fn declares_namespaces_the_book_only_declares_per_element() {
+        // As in a real book: no xmlns:dc or xmlns:opf on <package> or
+        // <metadata>, only on each element.
+        let opf = r##"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="bookid">
+  <metadata>
+    <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="bookid">bm:x</dc:identifier>
+    <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Old</dc:title>
+    <meta name="cover" content="c"/>
+  </metadata>
+</package>"##;
+        let out = apply(opf, &meta()).unwrap();
+        // A namespace-aware parse: every prefix must be declared.
+        let mut r = quick_xml::NsReader::from_str(&out);
+        loop {
+            match r.read_resolved_event() {
+                Ok((ns, Event::Start(e) | Event::Empty(e))) => {
+                    let has_prefix = e.name().as_ref().contains(':');
+                    assert!(
+                        !has_prefix || !matches!(ns, quick_xml::name::ResolveResult::Unknown(_)),
+                        "undeclared prefix in {out}"
+                    );
+                }
+                Ok((_, Event::Eof)) => break,
+                Ok(_) => {}
+                Err(e) => panic!("{e}\n{out}"),
+            }
+        }
+        assert!(!out.contains(">Old<"));
     }
 
     #[test]

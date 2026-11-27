@@ -544,7 +544,7 @@ impl Library {
 
     /// The cover the library stored for a book itself (`covers/book-<id>.*`),
     /// as opposed to a thumbnail copied from a device.
-    pub(crate) fn own_cover(&self, book_id: i64) -> Option<PathBuf> {
+    pub fn own_cover(&self, book_id: i64) -> Option<PathBuf> {
         let dir = self.assets_dir()?.join("covers");
         ["jpg", "png", "gif", "webp"]
             .iter()
