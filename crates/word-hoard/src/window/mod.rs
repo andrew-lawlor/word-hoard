@@ -186,6 +186,8 @@ pub struct Window {
     monitor: gio::VolumeMonitor,
     kobo: RefCell<Option<Connected>>,
     importing: Cell<bool>,
+    /// Books are being sent to the Kobo (one send at a time; no eject).
+    sending: Cell<bool>,
     /// Handwriting is being read in the background.
     transcribing: Cell<bool>,
     /// More handwriting arrived (an import) while it was: read it next.
@@ -449,6 +451,7 @@ impl Window {
             monitor: gio::VolumeMonitor::get(),
             kobo: RefCell::default(),
             importing: Cell::new(false),
+            sending: Cell::new(false),
             transcribing: Cell::new(false),
             transcribe_again: Cell::new(false),
             selection_bar,

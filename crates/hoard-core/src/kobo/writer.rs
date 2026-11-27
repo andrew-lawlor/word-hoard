@@ -151,9 +151,14 @@ impl DeviceWriter {
         }
         let dir = dest.parent().unwrap_or(&self.mount);
         std::fs::create_dir_all(dir)?;
+        // Unique per write, so two sends (even from two programs) never share
+        // a temporary file.
+        static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let partial = dir.join(format!(
-            ".{}.word-hoard-partial",
-            dest.file_name().unwrap_or_default().to_string_lossy()
+            ".{}.{}-{n}.word-hoard-partial",
+            dest.file_name().unwrap_or_default().to_string_lossy(),
+            std::process::id()
         ));
         let written = (|| -> std::io::Result<()> {
             let mut input = std::fs::File::open(src)?;

@@ -615,8 +615,13 @@ impl Window {
             n => format!("{} selected", plural(n, "book", "books")),
         });
         let connected = self.kobo.borrow().is_some();
-        self.library.send.set_sensitive(n > 0 && connected);
-        self.library.send.set_tooltip_text(Some(&if connected {
+        let sending = self.sending.get();
+        self.library
+            .send
+            .set_sensitive(n > 0 && connected && !sending);
+        self.library.send.set_tooltip_text(Some(&if sending {
+            "Sending… wait for it to finish".to_owned()
+        } else if connected {
             format!("Send to Your {}", self.kobo_name())
         } else {
             "Connect your Kobo to send books to it".to_owned()

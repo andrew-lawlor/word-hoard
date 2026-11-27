@@ -171,6 +171,9 @@ impl Window {
         if ids.is_empty() {
             return;
         }
+        if self.sending.get() {
+            return self.toast("Still sending to your Kobo. Send more when it’s done.");
+        }
         let Some(root) = self.kobo.borrow().as_ref().map(|k| k.root.clone()) else {
             return self.error(
                 "No Kobo Connected",
@@ -265,6 +268,9 @@ impl Window {
         let this = self.clone();
         dialog.connect_response(None, move |_, response| {
             if response == "send" {
+                // The choice is made: leave select mode now, so more books can
+                // be chosen while these go.
+                this.set_selecting(false);
                 this.apply_send(plan.clone(), db.clone(), root.clone());
             }
         });
@@ -285,6 +291,10 @@ impl Window {
         else {
             return;
         };
+        if self.sending.replace(true) {
+            return self.toast("Still sending to your Kobo. Send more when it’s done.");
+        }
+        self.update_send_action();
         let name = self.kobo_name();
         let total = plan.items.len();
         self.start_progress(&format!("Sending {}…", plural(total, "book", "books")));
@@ -312,6 +322,8 @@ impl Window {
             .await;
             ticking.set(false);
             this.set_progress(None);
+            this.sending.set(false);
+            this.update_send_action();
             match result {
                 Ok(Ok(stats)) => {
                     if !stats.failed.is_empty() {
@@ -334,7 +346,6 @@ impl Window {
                             "Sent {}. Eject your {name} to add them.",
                             plural(stats.sent, "book", "books")
                         ));
-                        this.set_selecting(false);
                     }
                 }
                 Ok(Err(err)) => this.error("Couldn’t Send to the Kobo", err),

@@ -321,6 +321,11 @@ impl Window {
         if self.importing.get() {
             return;
         }
+        if self.sending.get() {
+            return self.toast(
+                "Word Hoard is still sending books to your Kobo. Eject it when that’s done.",
+            );
+        }
         let Some((mount, root)) = self
             .kobo
             .borrow()
