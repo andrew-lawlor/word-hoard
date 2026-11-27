@@ -6,6 +6,10 @@ pub enum Error {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error(
+        "this Kobo's database (version {0}) hasn't been checked with Word Hoard, so it won't change it"
+    )]
+    UntestedKoboDb(i64),
     /// Opening, moving or choosing a library folder.
     #[error("{0}")]
     Library(String),

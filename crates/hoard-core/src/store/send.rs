@@ -301,6 +301,80 @@ impl Library {
         })
     }
 
+    /// What the Kobo should show for each sideloaded book on it that's in
+    /// the library (see [`crate::kobo::details`]), compared with what it
+    /// shows now (`on_kobo`): only the books and fields that differ.
+    pub fn kobo_detail_changes(
+        &self,
+        mount: &Path,
+        on_kobo: &std::collections::HashMap<String, crate::kobo::details::KoboDetails>,
+    ) -> Result<Vec<crate::kobo::details::KoboDetails>> {
+        use crate::kobo::details::KoboDetails;
+        use crate::kobo::opf_meta::{description_html, series_number};
+        let device = DeviceInfo::identify(mount)?;
+        let pairs: Vec<(String, i64)> = self
+            .conn
+            .prepare(
+                "SELECT s.volume_id, s.book_id FROM book_source s JOIN device d ON d.id = s.device_id
+                 WHERE d.serial = ?1 AND s.volume_id LIKE 'file:///mnt/onboard/%'",
+            )?
+            .query_map([&device.serial], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut changes = Vec::new();
+        for (content_id, book_id) in pairs {
+            let Some(have) = on_kobo.get(&content_id) else {
+                continue; // Not added by the Kobo yet (it adds books on eject).
+            };
+            let m = self.send_metadata(book_id)?;
+            let names: Vec<&str> = m.authors.iter().map(|(n, _)| n.as_str()).collect();
+            let want = KoboDetails {
+                content_id,
+                title: m.title,
+                // Several authors as Calibre lists them for the Kobo.
+                attribution: (!names.is_empty()).then(|| names.join(" & ")),
+                description: m.description.as_deref().map(description_html),
+                publisher: m.publisher,
+                series_number: m
+                    .series
+                    .as_ref()
+                    .and(m.series_index.as_deref())
+                    .map(series_number),
+                series: m.series,
+            };
+            if let Some(change) = want.changes_from(have) {
+                changes.push(change);
+            }
+        }
+        Ok(changes)
+    }
+
+    /// Brings the details the Kobo at `mount` shows for sideloaded books in
+    /// the library into step with it: reads a copy of the Kobo's database,
+    /// and only if something differs, backs it up (into `backups`) and
+    /// writes the differences. Returns how many books changed.
+    pub fn update_kobo_details(&self, mount: &Path, backups: &Path) -> Result<usize> {
+        let work = tempfile::Builder::new()
+            .prefix("word-hoard-kobo-")
+            .tempdir()?;
+        let copy = work.path().join("KoboReader.sqlite");
+        std::fs::copy(mount.join(crate::kobo::device::DB_RELATIVE_PATH), &copy)?;
+        for suffix in ["-wal", "-shm"] {
+            let side = mount.join(format!("{}{suffix}", crate::kobo::device::DB_RELATIVE_PATH));
+            if side.is_file() {
+                std::fs::copy(
+                    &side,
+                    work.path().join(format!("KoboReader.sqlite{suffix}")),
+                )?;
+            }
+        }
+        let on_kobo = crate::kobo::details::read_details(&copy)?;
+        let changes = self.kobo_detail_changes(mount, &on_kobo)?;
+        if changes.is_empty() {
+            return Ok(0);
+        }
+        DeviceWriter::open(mount, backups)?.update_details(&changes)
+    }
+
     /// The books on the Kobo mounted at `mount`: those with a copy recorded
     /// there that still exists (a store book, or a sideloaded file that's
     /// present), as [`Self::plan_send`] judges it.
@@ -375,6 +449,86 @@ mod tests {
         let mut opf = String::new();
         std::io::Read::read_to_string(&mut zip.by_name(&name).unwrap(), &mut opf).unwrap();
         opf
+    }
+
+    #[test]
+    fn brings_the_kobos_details_into_step_with_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fake_kobo(&kobo);
+        crate::kobo::details::tests::fake_kobo_db(&kobo.join(".kobo/KoboReader.sqlite"), 176);
+        let lib = Library::open(&dir.path().join("data/library.db")).unwrap();
+        lib.set_books_root(&dir.path().join("Books")).unwrap();
+        let src = dir.path().join("hammer.epub");
+        epub(&src, "The Hammer and the Cross", "Harry Harrison");
+        let book = lib.add_file(&src, AddMode::Copy).unwrap().book_id;
+        lib.conn
+            .execute(
+                "UPDATE book SET series = 'The Hammer and the Cross', series_number = '1.0',
+                 publisher = 'Tor' WHERE id = ?1",
+                [book],
+            )
+            .unwrap();
+        let device = lib
+            .upsert_device(&DeviceInfo::identify(&kobo).unwrap())
+            .unwrap();
+        lib.conn
+            .execute(
+                "INSERT INTO book_source (device_id, volume_id, book_id) VALUES (?1, ?2, ?3)",
+                params![
+                    device,
+                    "file:///mnt/onboard/Books/H/Hammer.kepub.epub",
+                    book
+                ],
+            )
+            .unwrap();
+        let backups = dir.path().join("backups");
+
+        assert_eq!(lib.update_kobo_details(&kobo, &backups).unwrap(), 1);
+        assert!(backups.exists(), "backed up first");
+        let conn = rusqlite::Connection::open(kobo.join(".kobo/KoboReader.sqlite")).unwrap();
+        let (title, author, series, number, publisher): (String, String, String, String, String) =
+            conn.query_row(
+                "SELECT Title, Attribution, Series, SeriesNumber, Publisher FROM content
+                 WHERE ContentType = 6 AND ContentID LIKE 'file://%'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                title.as_str(),
+                author.as_str(),
+                series.as_str(),
+                number.as_str(),
+                publisher.as_str()
+            ),
+            (
+                "The Hammer and the Cross",
+                "Harry Harrison",
+                "The Hammer and the Cross",
+                "1",
+                "Tor"
+            )
+        );
+        drop(conn);
+        // In step now: no backup, no write.
+        std::fs::remove_dir_all(&backups).unwrap();
+        assert_eq!(lib.update_kobo_details(&kobo, &backups).unwrap(), 0);
+        assert!(!backups.exists());
+
+        // An unverified database version is left alone.
+        lib.conn
+            .execute("UPDATE book SET publisher = 'Other' WHERE id = ?1", [book])
+            .unwrap();
+        rusqlite::Connection::open(kobo.join(".kobo/KoboReader.sqlite"))
+            .unwrap()
+            .execute("UPDATE DbVersion SET version = 999", [])
+            .unwrap();
+        assert!(matches!(
+            lib.update_kobo_details(&kobo, &backups),
+            Err(Error::UntestedKoboDb(999))
+        ));
     }
 
     #[test]

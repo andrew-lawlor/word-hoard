@@ -243,7 +243,7 @@ fn esc(s: &str) -> String {
 }
 
 /// `2.0` → `2`; other numbers as they are.
-fn series_number(n: &str) -> String {
+pub(crate) fn series_number(n: &str) -> String {
     n.trim().strip_suffix(".0").unwrap_or(n.trim()).to_owned()
 }
 
@@ -251,7 +251,7 @@ fn series_number(n: &str) -> String {
 /// library keeps descriptions as plain text with blank lines between
 /// paragraphs; each paragraph becomes a `<p>`. One that's HTML already is
 /// left as it is.
-fn description_html(d: &str) -> String {
+pub(crate) fn description_html(d: &str) -> String {
     let t = d.trim();
     if t.starts_with('<') && t.ends_with('>') {
         return t.to_owned();

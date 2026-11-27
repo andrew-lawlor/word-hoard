@@ -1,5 +1,6 @@
 //! The Preferences dialog, including dictionaries.
 
+use super::device::KOBO_DETAILS_OFF;
 use super::*;
 
 impl Window {
@@ -10,7 +11,7 @@ impl Window {
         page.add(&self.library_group(&dialog));
         let group = adw::PreferencesGroup::builder()
             .title("Kobo")
-            .description("Word Hoard reads from a copy of your Kobo’s database. It writes to the Kobo only when you send it books, after backing up its database.")
+            .description("Word Hoard reads from a copy of your Kobo’s database. It writes to the Kobo only to send it books and keep their details in step, after backing up its database.")
             .build();
         let on_connect = adw::ComboRow::builder()
             .title("When a Kobo Is Connected")
@@ -30,6 +31,19 @@ impl Window {
             }
         });
         group.add(&on_connect);
+
+        let details = adw::SwitchRow::builder()
+            .title("Keep Book Details in Step")
+            .subtitle("When your Kobo connects, books from your library on it get your library’s title, authors, series, description and publisher. The Kobo reads these only once, when it first adds a book.")
+            .active(!self.flag(KOBO_DETAILS_OFF))
+            .build();
+        let weak = Rc::downgrade(self);
+        details.connect_active_notify(move |row| {
+            if let Some(this) = weak.upgrade() {
+                this.set_flag(KOBO_DETAILS_OFF, !row.is_active());
+            }
+        });
+        group.add(&details);
 
         let delete_policy = adw::ComboRow::builder()
             .title("When a Highlight Is Deleted on the Kobo")

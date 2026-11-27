@@ -31,6 +31,7 @@ impl Window {
         }
         let this = self.clone();
         let is_connected = self.kobo.borrow().as_ref().is_some_and(|k| k.root == path);
+        let path_for_details = path.clone();
         if is_connected {
             self.set_banner(&format!("Importing from your {}…", self.kobo_name()), None);
         } else {
@@ -98,6 +99,9 @@ impl Window {
                     this.warn_if_untested(&device, db_version);
                     this.auto_sync_obsidian();
                     this.transcribe_pending();
+                    if is_connected {
+                        this.update_kobo_details(path_for_details.clone());
+                    }
                     if let Some(err) = asset_error {
                         this.toast(&format!("Some images couldn’t be copied: {err}"));
                     }
@@ -603,6 +607,43 @@ async fn udisks_eject(root: &std::path::Path) -> Result<Option<()>, glib::Error>
         }
     }
     Ok(Some(()))
+}
+
+/// Setting: "1" turns off keeping book details in step on the Kobo.
+pub(super) const KOBO_DETAILS_OFF: &str = "kobo_details_off";
+
+impl Window {
+    /// Brings the details the connected Kobo shows for books from the library
+    /// into step with it (title, authors, series, description, publisher), in
+    /// the background, unless turned off in Preferences. The Kobo's database
+    /// is backed up first, and only when something changes.
+    fn update_kobo_details(self: &Rc<Self>, mount: PathBuf) {
+        if self.flag(KOBO_DETAILS_OFF) || self.sending.get() {
+            return;
+        }
+        let Some(db) = self.lib.borrow().path().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        let backups = hoard_core::local_dir().join("backups/kobo");
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || {
+                hoard_core::Library::open(&db)?.update_kobo_details(&mount, &backups)
+            })
+            .await;
+            match result {
+                Ok(Ok(0)) => {}
+                Ok(Ok(n)) => this.toast(&format!(
+                    "Updated the details of {} on your {}",
+                    plural(n, "book", "books"),
+                    this.kobo_name()
+                )),
+                Ok(Err(hoard_core::Error::UntestedKoboDb(_))) => {}
+                Ok(Err(err)) => this.error("Couldn’t Update Book Details on the Kobo", err),
+                Err(_) => {}
+            }
+        });
+    }
 }
 
 #[cfg(test)]

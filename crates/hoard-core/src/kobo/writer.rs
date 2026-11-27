@@ -2,10 +2,13 @@
 //! "Writing to the device"). Everything else goes through
 //! [`super::ensure_not_on_kobo`], which refuses any path on a device.
 //!
-//! A [`DeviceWriter`] exists only while a send the user approved is being
-//! applied. Opening one backs up the Kobo's database first. It can copy a
-//! book file into the Kobo's storage (replacing a book file only when asked),
-//! and clear the covers the Kobo saved for that book, and nothing else: no
+//! A [`DeviceWriter`] exists only while a change the user approved (sending
+//! books, or keeping sideloaded books' details in step) is being applied.
+//! Opening one backs up the Kobo's database first. It can copy a book file
+//! into the Kobo's storage (replacing a book file only when asked), clear the
+//! covers the Kobo saved for that book, and write sideloaded books' details
+//! (title, authors, series, description, publisher) into the database's
+//! `content` table on a verified database version; nothing else: no other
 //! database writes (the Kobo indexes new books itself when it's ejected), no
 //! other deletes, nothing else under `.kobo` or other hidden folders.
 
@@ -119,6 +122,21 @@ impl DeviceWriter {
             }
         }
         Ok(deleted)
+    }
+
+    /// Writes sideloaded books' details into the Kobo's database (see
+    /// [`super::details`]), in one transaction, after the backup this writer
+    /// made when it opened. Only `content` rows of sideloaded books, only the
+    /// fields given, and only on a database version verified on a real
+    /// device. Returns how many books changed.
+    pub fn update_details(&self, updates: &[super::details::KoboDetails]) -> Result<usize> {
+        let mut conn =
+            rusqlite::Connection::open(self.mount.join(super::device::DB_RELATIVE_PATH))?;
+        let version = super::details::db_version(&conn)?.unwrap_or(0);
+        if !super::model::is_tested_db_version(version) {
+            return Err(Error::UntestedKoboDb(version));
+        }
+        super::details::write(&mut conn, updates)
     }
 
     /// Whether a file already exists at `relative` on the Kobo.

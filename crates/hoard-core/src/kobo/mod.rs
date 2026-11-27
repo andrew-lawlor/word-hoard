@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod chapters;
+pub mod details;
 pub mod device;
 pub mod epub;
 pub mod kepub;
