@@ -91,6 +91,7 @@ pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
     output.start_file("mimetype", stored).map_err(io_err)?;
     output.write_all(b"application/epub+zip")?;
 
+    let opf_path = package_path(&mut input);
     let mut stats = KepubStats::default();
     for i in 0..input.len() {
         let mut entry = input.by_index(i).map_err(io_err)?;
@@ -101,7 +102,11 @@ pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
         let mut bytes = Vec::with_capacity(entry.size() as usize);
         entry.read_to_end(&mut bytes)?;
         drop(entry);
-        if is_content_document(&name) {
+        if Some(name.as_str()) == opf_path.as_deref() {
+            if let Some(fixed) = mark_cover_image(&String::from_utf8_lossy(&bytes)) {
+                bytes = fixed.into_bytes();
+            }
+        } else if is_content_document(&name) {
             let text = String::from_utf8_lossy(&bytes);
             let (converted, spans) = convert_document(&text)?;
             bytes = converted.into_bytes();
@@ -113,6 +118,111 @@ pub fn convert(src: &Path, dest: &Path) -> Result<KepubStats> {
     }
     output.finish().map_err(io_err)?;
     Ok(stats)
+}
+
+/// The package document's path, from `META-INF/container.xml`.
+fn package_path<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> Option<String> {
+    let mut container = String::new();
+    zip.by_name("META-INF/container.xml")
+        .ok()?
+        .read_to_string(&mut container)
+        .ok()?;
+    let mut reader = Reader::from_str(&container);
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if e.local_name().as_ref() == "rootfile" => {
+                return crate::kobo::epub::attr(&e, "full-path");
+            }
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+    }
+}
+
+/// Marks an EPUB 2 book's cover for the Kobo. Such books name their cover
+/// only with `<meta name="cover" content="ID">`; Nickel looks for the
+/// manifest item with `properties="cover-image"` (EPUB 3), and without one
+/// it may show another image from the book. `None` when there's nothing to
+/// change (the cover is already marked, or the book names none).
+pub(crate) fn mark_cover_image(opf: &str) -> Option<String> {
+    // First pass: is a cover already marked, and which item does the meta name?
+    let mut reader = Reader::from_str(opf);
+    let mut cover_id = None;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+                "item" => {
+                    let props = crate::kobo::epub::attr(&e, "properties").unwrap_or_default();
+                    if props.split_whitespace().any(|p| p == "cover-image") {
+                        return None;
+                    }
+                }
+                "meta" if crate::kobo::epub::attr(&e, "name").as_deref() == Some("cover") => {
+                    cover_id = crate::kobo::epub::attr(&e, "content");
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(_) => return None,
+            _ => {}
+        }
+    }
+    let cover_id = cover_id?;
+    // Second pass: copy the document, adding the property to that item.
+    let mut reader = Reader::from_str(opf);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::with_capacity(opf.len() + 32));
+    let mut marked = false;
+    loop {
+        let event = match reader.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(e) => e,
+            Err(_) => return None,
+        };
+        let mark = |e: &BytesStart| {
+            e.local_name().as_ref() == "item"
+                && crate::kobo::epub::attr(e, "id").as_deref() == Some(cover_id.as_str())
+        };
+        let written = match event {
+            Event::Empty(e) if mark(&e) => {
+                marked = true;
+                writer.write_event(Event::Empty(with_cover_property(&e)))
+            }
+            Event::Start(e) if mark(&e) => {
+                marked = true;
+                writer.write_event(Event::Start(with_cover_property(&e)))
+            }
+            e => writer.write_event(e),
+        };
+        written.ok()?;
+    }
+    marked
+        .then(|| String::from_utf8(writer.into_inner()).ok())
+        .flatten()
+}
+
+/// The element with `cover-image` added to its `properties`.
+fn with_cover_property(e: &BytesStart) -> BytesStart<'static> {
+    let name = String::from_utf8_lossy(e.name().as_ref().as_bytes()).into_owned();
+    let mut out = BytesStart::new(name);
+    let mut had = false;
+    for a in e.attributes().flatten() {
+        let key = String::from_utf8_lossy(a.key.as_ref().as_bytes()).into_owned();
+        let value = a
+            .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+            .map(|v| v.into_owned())
+            .unwrap_or_default();
+        if key == "properties" {
+            had = true;
+            out.push_attribute((key.as_str(), format!("{value} cover-image").trim()));
+        } else {
+            out.push_attribute((key.as_str(), value.as_str()));
+        }
+    }
+    if !had {
+        out.push_attribute(("properties", "cover-image"));
+    }
+    out
 }
 
 /// One run of text being gathered across text, entity and CDATA events.
@@ -434,6 +544,29 @@ mod tests {
             .replace(r#"<div id="book-columns"><div id="book-inner">"#, "")
             .replace("</div></div></body>", "</body>");
         assert!(text.contains("It was a dark night. The wind <em>howled!</em> Tom &amp; Jerry ran… “Where?” she asked."));
+    }
+
+    #[test]
+    fn marks_an_epub2_cover_for_the_kobo() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><metadata><meta content="cover-image" name="cover"/></metadata><manifest><item href="thumb.jpg" id="thumb" media-type="image/jpeg"/><item href="cover.jpg" id="cover-image" media-type="image/jpeg"/></manifest></package>"#;
+        let fixed = mark_cover_image(opf).unwrap();
+        assert!(fixed.contains(r#"<item href="cover.jpg" id="cover-image" media-type="image/jpeg" properties="cover-image"/>"#), "{fixed}");
+        assert!(fixed.contains(r#"<item href="thumb.jpg" id="thumb" media-type="image/jpeg"/>"#));
+        // Already marked, or no cover named: left alone.
+        assert_eq!(mark_cover_image(&fixed), None);
+        assert_eq!(
+            mark_cover_image(
+                r#"<package><manifest><item id="a" href="a.jpg"/></manifest></package>"#
+            ),
+            None
+        );
+        // Existing properties are kept.
+        let svg = r#"<package><metadata><meta name="cover" content="c"/></metadata><manifest><item id="c" href="c.svg" properties="svg"/></manifest></package>"#;
+        assert!(
+            mark_cover_image(svg)
+                .unwrap()
+                .contains(r#"properties="svg cover-image""#)
+        );
     }
 
     #[test]

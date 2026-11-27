@@ -785,6 +785,48 @@ mod tests {
     }
 
     #[test]
+    fn device_thumbnails_never_replace_the_librarys_own_cover() {
+        let (dir, lib) = library();
+        let src = dir.path().join("h.epub");
+        write_epub(&src, &opf("The Hammer and the Cross", "Harry Harrison", ""));
+        let book = lib.add_file(&src, AddMode::Copy).unwrap().book_id;
+        let covers = dir.path().join("data/covers");
+        std::fs::create_dir_all(&covers).unwrap();
+        let own = covers.join(format!("book-{book}.jpg"));
+        std::fs::write(&own, b"calibre cover").unwrap();
+        let thumbnail = covers.join("7d09d2d821a1deeabd3efe5f.jpg");
+        std::fs::write(&thumbnail, b"kobo thumbnail").unwrap();
+        // The Kobo's copy of the book, as an import records it.
+        let device =
+            crate::kobo::DeviceInfo::parse("N1,4.9.77,4.46.23836,4.9.77,4.9.77,id").unwrap();
+        lib.conn
+            .execute(
+                "INSERT INTO device (serial, first_seen_at, last_seen_at) VALUES ('N1', ?1, ?1)",
+                [Utc::now()],
+            )
+            .unwrap();
+        lib.conn
+            .execute(
+                "INSERT INTO book_source (device_id, volume_id, book_id) VALUES (1, 'file:///mnt/onboard/h.kepub.epub', ?1)",
+                [book],
+            )
+            .unwrap();
+        // An earlier import had put the thumbnail in its place.
+        lib.conn
+            .execute(
+                "UPDATE book SET cover_path = ?2 WHERE id = ?1",
+                params![book, thumbnail.to_string_lossy()],
+            )
+            .unwrap();
+        let assets = crate::kobo::assets::CopiedAssets {
+            covers: vec![("file:///mnt/onboard/h.kepub.epub".into(), thumbnail.clone())],
+            ..Default::default()
+        };
+        lib.attach_assets(&device, &assets).unwrap();
+        assert_eq!(lib.book(book).unwrap().unwrap().cover, Some(own));
+    }
+
+    #[test]
     fn refuses_other_formats() {
         let (dir, lib) = library();
         let pdf = dir.path().join("x.pdf");

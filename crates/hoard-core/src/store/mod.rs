@@ -517,11 +517,23 @@ impl Library {
     ) -> Result<()> {
         let path = |p: &Option<PathBuf>| p.as_ref().map(|p| p.to_string_lossy().into_owned());
         for (volume_id, cover) in &assets.covers {
+            let book_id: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT s.book_id FROM book_source s JOIN device d ON d.id = s.device_id
+                     WHERE d.serial = ?1 AND s.volume_id = ?2",
+                    params![device.serial, volume_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(book_id) = book_id else { continue };
+            // A cover the library chose itself (from Calibre or the book's
+            // own EPUB) wins over the Kobo's thumbnail, which can be wrong;
+            // one an earlier import replaced is put back.
+            let cover = self.own_cover(book_id).unwrap_or_else(|| cover.clone());
             self.conn.execute(
-                "UPDATE book SET cover_path = ?3 WHERE id = (
-                    SELECT s.book_id FROM book_source s JOIN device d ON d.id = s.device_id
-                    WHERE d.serial = ?1 AND s.volume_id = ?2)",
-                params![device.serial, volume_id, cover.to_string_lossy()],
+                "UPDATE book SET cover_path = ?2 WHERE id = ?1",
+                params![book_id, cover.to_string_lossy()],
             )?;
         }
         for m in &assets.markups {
@@ -535,6 +547,16 @@ impl Library {
             )?;
         }
         Ok(())
+    }
+
+    /// The cover the library stored for a book itself (`covers/book-<id>.*`),
+    /// as opposed to a thumbnail copied from a device.
+    pub(crate) fn own_cover(&self, book_id: i64) -> Option<PathBuf> {
+        let dir = self.assets_dir()?.join("covers");
+        ["jpg", "png", "gif", "webp"]
+            .iter()
+            .map(|ext| dir.join(format!("book-{book_id}.{ext}")))
+            .find(|p| p.is_file())
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
