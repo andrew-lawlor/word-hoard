@@ -484,6 +484,7 @@ impl Window {
             *self.library.on_device.borrow_mut() = on;
             self.library.refresh(None);
         }
+        self.update_send_action();
     }
 
     /// Selects every book listed (turning select mode on).
@@ -639,16 +640,62 @@ impl Window {
         });
         let connected = self.kobo.borrow().is_some();
         let sending = self.sending.get();
+        // How many of the chosen books are on the Kobo already: all of them
+        // means the button updates them; some, and the confirmation offers
+        // to update those too.
+        let on_kobo = {
+            let on = self.library.on_device.borrow();
+            self.library
+                .selected
+                .borrow()
+                .iter()
+                .filter(|id| on.contains(id))
+                .count()
+        };
+        let all_there = n > 0 && on_kobo == n;
+        if let Some(content) = self
+            .library
+            .send
+            .child()
+            .and_downcast::<adw::ButtonContent>()
+        {
+            if all_there {
+                content.set_label("Update on Kobo");
+                content.set_icon_name("view-refresh-symbolic");
+            } else {
+                content.set_label("Send to Kobo");
+                content.set_icon_name("document-send-symbolic");
+            }
+        }
         self.library
             .send
             .set_sensitive(n > 0 && connected && !sending);
         self.library.send.set_tooltip_text(Some(&if sending {
             "Sending… wait for it to finish".to_owned()
-        } else if connected {
-            format!("Send to Your {}", self.kobo_name())
-        } else {
+        } else if !connected {
             "Connect your Kobo to send books to it".to_owned()
+        } else if all_there {
+            format!(
+                "Replace {} on your {} with a fresh copy carrying your library’s cover and details",
+                if n == 1 { "it" } else { "them" },
+                self.kobo_name()
+            )
+        } else if on_kobo > 0 {
+            format!(
+                "Send to Your {} ({} there already: you can update {} too)",
+                self.kobo_name(),
+                on_kobo,
+                if on_kobo == 1 { "it" } else { "them" }
+            )
+        } else {
+            format!("Send to Your {}", self.kobo_name())
         }));
+        if n > 0 && on_kobo > 0 && !all_there {
+            self.library.bar_label.set_label(&format!(
+                "{} selected · {on_kobo} on your Kobo",
+                plural(n, "book", "books")
+            ));
+        }
     }
 
     /// Replaces the Library's books. Chosen books that are no longer listed
