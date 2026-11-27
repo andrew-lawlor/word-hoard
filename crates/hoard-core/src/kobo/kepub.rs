@@ -294,7 +294,11 @@ fn cover_as(cover: &Path, name: &str) -> Result<Vec<u8>> {
     } else {
         image::ImageFormat::Jpeg
     };
-    if image::guess_format(&bytes).ok() == Some(want) {
+    // A baseline JPEG goes in as it is. Anything else is re-encoded, a
+    // progressive JPEG included: Kobos can't decode those for covers and
+    // fall back to a plain one (found with a cover from Calibre).
+    let progressive = bytes.windows(2).any(|w| w == [0xFF, 0xC2]);
+    if image::guess_format(&bytes).ok() == Some(want) && !progressive {
         return Ok(bytes);
     }
     let decoded = image::load_from_memory(&bytes).map_err(io_err)?;
@@ -695,6 +699,10 @@ mod tests {
             image::guess_format(&cover).unwrap(),
             image::ImageFormat::Jpeg
         );
+        assert!(
+            !cover.windows(2).any(|w| w == [0xFF, 0xC2]),
+            "baseline, not progressive"
+        );
         let img = image::load_from_memory(&cover).unwrap();
         assert_eq!((img.width(), img.height()), (40, 60), "the library's cover");
         let mut thumb = Vec::new();
@@ -714,6 +722,30 @@ mod tests {
             .read_to_string(&mut opf)
             .unwrap();
         assert!(opf.contains(r#"properties="cover-image""#));
+    }
+
+    #[test]
+    fn re_encodes_progressive_jpeg_covers() {
+        let dir = tempfile::tempdir().unwrap();
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            96,
+            image::Rgb([90; 3]),
+        ));
+        // A real progressive JPEG isn't something the image crate writes, so
+        // a baseline one is made and checked to pass through untouched, and a
+        // PNG to be re-encoded as baseline.
+        let base = dir.path().join("b.jpg");
+        img.save(&base).unwrap();
+        assert_eq!(
+            cover_as(&base, "cover.jpg").unwrap(),
+            std::fs::read(&base).unwrap()
+        );
+        let png = dir.path().join("c.png");
+        img.save(&png).unwrap();
+        let out = cover_as(&png, "cover.jpg").unwrap();
+        assert_eq!(image::guess_format(&out).unwrap(), image::ImageFormat::Jpeg);
+        assert!(!out.windows(2).any(|w| w == [0xFF, 0xC2]));
     }
 
     #[test]

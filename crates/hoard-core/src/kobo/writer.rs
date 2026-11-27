@@ -94,9 +94,24 @@ impl DeviceWriter {
     /// Copies `src` to `relative` on the Kobo, through a temporary name and a
     /// rename, so an unplugged cable never leaves half a book behind.
     pub fn copy_book(&self, src: &Path, relative: &Path) -> Result<PathBuf> {
+        self.write_book(src, relative, false)
+    }
+
+    /// [`Self::copy_book`], replacing the book file already at `relative`
+    /// (re-sending a book whose cover or details changed). Only a book file
+    /// (`.epub`, `.kepub.epub`, `.pdf`) is ever replaced.
+    pub fn replace_book(&self, src: &Path, relative: &Path) -> Result<PathBuf> {
+        self.write_book(src, relative, true)
+    }
+
+    fn write_book(&self, src: &Path, relative: &Path, replace: bool) -> Result<PathBuf> {
         let relative = check_relative(relative)?;
         let dest = self.mount.join(relative);
-        if dest.exists() {
+        let is_book = {
+            let name = relative.to_string_lossy().to_ascii_lowercase();
+            [".epub", ".pdf"].iter().any(|e| name.ends_with(e))
+        };
+        if dest.exists() && !(replace && is_book && dest.is_file()) {
             return Err(Error::AlreadyOnKobo(dest));
         }
         let dir = dest.parent().unwrap_or(&self.mount);
@@ -180,6 +195,19 @@ mod tests {
         // Never overwrites, never outside the storage, never on the Kobo's own files.
         assert!(matches!(
             writer.copy_book(&book, rel),
+            Err(Error::AlreadyOnKobo(_))
+        ));
+        // Replacing a book file on purpose is allowed; nothing else is.
+        std::fs::write(&book, b"kepub v2").unwrap();
+        writer.replace_book(&book, rel).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"kepub v2");
+        assert!(matches!(
+            writer.replace_book(&book, Path::new(".kobo/KoboReader.sqlite")),
+            Err(Error::BadKoboPath(_))
+        ));
+        std::fs::write(kobo.join("notes.txt"), b"mine").unwrap();
+        assert!(matches!(
+            writer.replace_book(&book, Path::new("notes.txt")),
             Err(Error::AlreadyOnKobo(_))
         ));
         for bad in [

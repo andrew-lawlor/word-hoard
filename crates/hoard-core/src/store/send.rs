@@ -37,6 +37,8 @@ pub struct SendItem {
     pub dest: PathBuf,
     pub size: u64,
     pub action: SendAction,
+    /// Replaces the copy already on the Kobo (re-sending).
+    pub replace: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +75,17 @@ impl Library {
     /// What sending `book_ids` to the Kobo at `mount` would do. Writes
     /// nothing anywhere.
     pub fn plan_send(&self, mount: &Path, book_ids: &[i64]) -> Result<SendPlan> {
+        self.plan_send_with(mount, book_ids, false)
+    }
+
+    /// [`Self::plan_send`]; with `replace`, books already on the Kobo are
+    /// sent again over their copy there instead of being skipped.
+    pub fn plan_send_with(
+        &self,
+        mount: &Path,
+        book_ids: &[i64],
+        replace: bool,
+    ) -> Result<SendPlan> {
         let device = DeviceInfo::identify(mount)?;
         let folder = self
             .setting(KOBO_FOLDER_SETTING)?
@@ -108,7 +121,13 @@ impl Library {
                     Some(rel) => mount.join(rel).is_file(),
                     None => true,
                 });
-            if on_device {
+            // The sideloaded copy to replace, when re-sending.
+            let existing: Option<PathBuf> = volumes
+                .iter()
+                .filter_map(|v| v.strip_prefix("file:///mnt/onboard/"))
+                .map(PathBuf::from)
+                .find(|rel| mount.join(rel).is_file());
+            if on_device && !(replace && existing.is_some()) {
                 plan.skipped.push(skip("already on this Kobo"));
                 continue;
             }
@@ -153,7 +172,9 @@ impl Library {
             let dest = PathBuf::from(safe_component(&folder))
                 .join(safe_component(&author_folder))
                 .join(format!("{}.{ext}", safe_component(&book.title)));
-            if mount.join(&dest).exists() {
+            let dest = existing.clone().filter(|_| replace).unwrap_or(dest);
+            let replacing = replace && mount.join(&dest).is_file();
+            if mount.join(&dest).exists() && !replacing {
                 plan.skipped
                     .push(skip("a file by that name is already on the Kobo"));
                 continue;
@@ -170,6 +191,7 @@ impl Library {
                 } else {
                     SendAction::Copy
                 },
+                replace: replacing,
             });
         }
         Ok(plan)
@@ -210,7 +232,11 @@ impl Library {
                     }
                     SendAction::Copy => item.source.clone(),
                 };
-                writer.copy_book(&file, &item.dest)?;
+                if item.replace {
+                    writer.replace_book(&file, &item.dest)?;
+                } else {
+                    writer.copy_book(&file, &item.dest)?;
+                }
                 self.conn.execute(
                     "INSERT INTO book_source (device_id, volume_id, book_id) VALUES (?1, ?2, ?3)
                      ON CONFLICT (device_id, volume_id) DO UPDATE SET book_id = excluded.book_id",
@@ -329,6 +355,18 @@ mod tests {
             volume,
             "file:///mnt/onboard/Books/Frank Herbert/Dune.kepub.epub"
         );
+
+        // Re-sending on purpose replaces the copy on the Kobo, at the same path.
+        let resend = lib.plan_send_with(&kobo, &[dune], true).unwrap();
+        assert_eq!(resend.items.len(), 1);
+        assert!(resend.items[0].replace);
+        assert_eq!(
+            resend.items[0].dest,
+            Path::new("Books/Frank Herbert/Dune.kepub.epub")
+        );
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        let again_stats = lib.apply_send(&writer, &resend, |_, _| {}).unwrap();
+        assert_eq!(again_stats.sent, 1, "{:?}", again_stats.failed);
 
         // Deleted from the Kobo (but still recorded): it can be sent again.
         std::fs::remove_file(&sent).unwrap();

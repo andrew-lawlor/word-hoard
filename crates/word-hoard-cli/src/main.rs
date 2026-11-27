@@ -66,6 +66,9 @@ enum Command {
         /// Write to the Kobo (after backing up its database).
         #[arg(long)]
         yes: bool,
+        /// Send books already on the Kobo again, replacing their copy there.
+        #[arg(long)]
+        replace: bool,
     },
     /// Search books and highlights across the library.
     Search {
@@ -206,7 +209,15 @@ fn main() -> Result<()> {
             search,
             books,
             yes,
-        } => send(&library_path, &mount, search.as_deref(), &books, yes),
+            replace,
+        } => send(
+            &library_path,
+            &mount,
+            search.as_deref(),
+            &books,
+            yes,
+            replace,
+        ),
         Command::Search { words, limit } => search(&library_path, &words.join(" "), limit),
         Command::ImportCalibre {
             path,
@@ -577,6 +588,7 @@ fn send(
     search: Option<&str>,
     ids: &[i64],
     yes: bool,
+    replace: bool,
 ) -> Result<()> {
     use hoard_core::kobo::writer::DeviceWriter;
     use hoard_core::store::BookSort;
@@ -593,11 +605,13 @@ fn send(
     if book_ids.is_empty() {
         anyhow::bail!("choose books with --search or --book");
     }
-    let plan = lib.plan_send(mount, &book_ids)?;
+    let plan = lib.plan_send_with(mount, &book_ids, replace)?;
     for item in &plan.items {
-        let how = match item.action {
-            SendAction::Convert => "convert and send",
-            SendAction::Copy => "send",
+        let how = match (item.action, item.replace) {
+            (SendAction::Convert, false) => "convert and send",
+            (SendAction::Copy, false) => "send",
+            (SendAction::Convert, true) => "convert and replace",
+            (SendAction::Copy, true) => "replace",
         };
         println!("{how}: {} → {}", item.title, item.dest.display());
     }
