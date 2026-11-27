@@ -220,6 +220,176 @@ pub fn move_library(db: &Path, new_folder: &Path) -> Result<PathBuf> {
     Ok(new_db)
 }
 
+/// What [`use_folder_in_place`] did.
+#[derive(Debug, Clone, Default)]
+pub struct InPlaceStats {
+    /// The database's new path.
+    pub db: PathBuf,
+    /// Library files matched to identical files already in the new folder;
+    /// their old copies are no longer used (see `old_copies`).
+    pub matched: usize,
+    /// Library files with no copy there, moved into the new folder.
+    pub moved: usize,
+    /// The old copies of matched files, now unused (absolute paths).
+    pub old_copies: Vec<PathBuf>,
+    /// The library's previous folder, where those copies are.
+    pub old_folder: PathBuf,
+}
+
+/// Makes `new_folder`, which already holds the library's books (a Calibre
+/// library, say), the library's folder, using those books where they are.
+/// Each library file is matched to an identical file there (same contents);
+/// files with no match are moved in, keeping their paths. Then the library's
+/// `.word-hoard` folder moves there too, so highlights, vocabulary and Kobo
+/// records come along. Old copies of matched files are left where they were
+/// (listed in the result) and nothing in `new_folder` is changed or
+/// overwritten. The database must not be open.
+pub fn use_folder_in_place(db: &Path, new_folder: &Path) -> Result<InPlaceStats> {
+    let old_folder = folder_of(db)
+        .ok_or_else(|| Error::Library(format!("{} isn't in a library folder", db.display())))?
+        .to_path_buf();
+    crate::kobo::ensure_not_on_kobo(new_folder)?;
+    let (old_c, new_c) = (old_folder.canonicalize()?, new_folder.canonicalize()?);
+    if old_c == new_c {
+        return Ok(InPlaceStats {
+            db: db.to_path_buf(),
+            ..Default::default()
+        });
+    }
+    if new_c.starts_with(&old_c) || old_c.starts_with(&new_c) {
+        return Err(Error::Library(
+            "A library can’t use a folder inside its own, or one that contains it".into(),
+        ));
+    }
+    if new_folder.join(LIBRARY_DATA_DIR).exists() {
+        return Err(Error::Library(format!(
+            "{} already holds a library",
+            new_folder.display()
+        )));
+    }
+    checkpoint(db)?;
+    let files: Vec<(i64, String, String, u64)> = {
+        let conn = Connection::open(db)?;
+        let mut stmt = conn.prepare("SELECT id, path, hash, size FROM book_file ORDER BY path")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
+    // The new folder's files, by contents; only files the size of a library
+    // file are fingerprinted.
+    let sizes: std::collections::HashSet<u64> = files.iter().map(|f| f.3).collect();
+    let mut there: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    let mut stack = vec![new_folder.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                stack.push(path);
+            } else if kind.is_file()
+                && entry.metadata().is_ok_and(|m| sizes.contains(&m.len()))
+                && let Ok((hash, _)) = super::books::hash_file(&path)
+                && let Ok(rel) = path.strip_prefix(new_folder)
+            {
+                there.entry(hash).or_insert_with(|| rel.to_path_buf());
+            }
+        }
+    }
+
+    // Match, or plan a move (never over a file already there).
+    let mut matched: Vec<(i64, PathBuf, PathBuf)> = Vec::new(); // id, old rel, new rel
+    let mut to_move: Vec<(i64, String)> = Vec::new();
+    for (id, rel, hash, _) in &files {
+        if !old_folder.join(rel).is_file() {
+            continue;
+        }
+        match there.remove(hash) {
+            Some(new_rel) => matched.push((*id, PathBuf::from(rel), new_rel)),
+            None => to_move.push((*id, rel.clone())),
+        }
+    }
+    if let Some((_, clash)) = to_move
+        .iter()
+        .find(|(_, rel)| new_folder.join(rel).exists())
+    {
+        return Err(Error::Library(format!(
+            "{} already has a different file at {clash}",
+            new_folder.display()
+        )));
+    }
+    let mut moved: Vec<&str> = Vec::new();
+    let undo = |moved: &[&str]| {
+        for rel in moved.iter().rev() {
+            let _ = move_path(&new_folder.join(rel), &old_folder.join(rel));
+        }
+    };
+    for (_, rel) in &to_move {
+        let to = new_folder.join(rel);
+        let result = to
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .map_err(Error::from)
+            .and_then(|()| move_path(&old_folder.join(rel), &to));
+        if let Err(err) = result {
+            undo(&moved);
+            return Err(err);
+        }
+        moved.push(rel);
+    }
+    let (old_data, new_data) = (
+        old_folder.join(LIBRARY_DATA_DIR),
+        new_folder.join(LIBRARY_DATA_DIR),
+    );
+    if let Err(err) = move_path(&old_data, &new_data) {
+        undo(&moved);
+        return Err(err);
+    }
+    let new_db = new_data.join(DB_NAME);
+    rewrite_asset_paths(&new_db, &old_data, &new_data)?;
+    {
+        let mut conn = Connection::open(&new_db)?;
+        let tx = conn.transaction()?;
+        for (id, _, new_rel) in &matched {
+            tx.execute(
+                "UPDATE book_file SET path = ?2 WHERE id = ?1",
+                params![id, new_rel.to_string_lossy()],
+            )?;
+        }
+        // The books folder is the library folder now; an old setting would
+        // only mislead.
+        tx.execute(
+            "DELETE FROM setting WHERE key = ?1",
+            [super::BOOKS_ROOT_SETTING],
+        )?;
+        tx.commit()?;
+    }
+    // Tidy the folders moved books left empty.
+    for (_, rel) in &to_move {
+        let mut dir = old_folder.join(rel);
+        while dir.pop() && dir != old_folder && std::fs::remove_dir(&dir).is_ok() {}
+    }
+    Ok(InPlaceStats {
+        db: new_db,
+        matched: matched.len(),
+        moved: to_move.len(),
+        old_copies: matched
+            .into_iter()
+            .map(|(_, old, _)| old_folder.join(old))
+            .collect(),
+        old_folder,
+    })
+}
+
 /// Folds the write-ahead log into the database, so the file alone is
 /// complete and can be moved.
 fn checkpoint(db: &Path) -> Result<()> {
@@ -348,6 +518,78 @@ mod tests {
         assert!(move_library(&moved, &other).is_err());
         assert!(move_library(&moved, &new.join("sub")).is_err());
         assert!(is_library(&new));
+    }
+
+    #[test]
+    fn uses_a_folder_that_already_has_the_books_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Books");
+        let calibre = dir.path().join("Nextcloud/Books");
+        let db = make_library(&old);
+        // The library's file, its hash recorded as adding would.
+        let (hash, _) =
+            crate::store::books::hash_file(&old.join("Ann Author/Book (2020)/Book.epub")).unwrap();
+        Connection::open(&db)
+            .unwrap()
+            .execute("UPDATE book_file SET hash = ?1", [hash])
+            .unwrap();
+        // Another book only Word Hoard has.
+        std::fs::create_dir_all(old.join("Bo Writer/Only Here (2021)")).unwrap();
+        std::fs::write(
+            old.join("Bo Writer/Only Here (2021)/Only Here.epub"),
+            b"only",
+        )
+        .unwrap();
+        Connection::open(&db)
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO book (id, fingerprint, title, created_at, updated_at) VALUES (2, 'g', 'Only Here', '2026-01-01', '2026-01-01');
+                 INSERT INTO book_file (book_id, path, format, size, hash, added_at)
+                 VALUES (2, 'Bo Writer/Only Here (2021)/Only Here.epub', 'epub', 4, 'other', '2026-01-01');",
+            )
+            .unwrap();
+        // The Calibre library: the same book under Calibre's layout.
+        std::fs::create_dir_all(calibre.join("Ann Author/Book (12)")).unwrap();
+        std::fs::write(
+            calibre.join("Ann Author/Book (12)/Book - Ann Author.epub"),
+            b"epub",
+        )
+        .unwrap();
+        std::fs::write(calibre.join("metadata.db"), b"calibre's").unwrap();
+
+        let stats = use_folder_in_place(&db, &calibre).unwrap();
+        assert_eq!((stats.matched, stats.moved), (1, 1));
+        assert_eq!(stats.db, library_db(&calibre));
+        assert_eq!(
+            stats.old_copies,
+            [old.join("Ann Author/Book (2020)/Book.epub")]
+        );
+        assert!(
+            stats.old_copies[0].is_file(),
+            "old copies are left for the user"
+        );
+        assert!(
+            calibre
+                .join("Bo Writer/Only Here (2021)/Only Here.epub")
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read(calibre.join("metadata.db")).unwrap(),
+            b"calibre's"
+        );
+        let lib = Library::open(&stats.db).unwrap();
+        let paths: Vec<PathBuf> = lib
+            .book_files(1)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert_eq!(
+            paths,
+            [calibre.join("Ann Author/Book (12)/Book - Ann Author.epub")]
+        );
+        assert_eq!(lib.books_root().unwrap(), calibre);
+        assert!(cover(&stats.db).starts_with(&calibre.join(".word-hoard").display().to_string()));
     }
 
     #[test]

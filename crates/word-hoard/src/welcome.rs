@@ -362,32 +362,46 @@ impl Welcome {
 
     fn from_calibre(self: &Rc<Self>) {
         let found = self.calibre.borrow().clone();
-        let Some((path, count)) = found else {
-            return self.choose_calibre();
-        };
+        match found {
+            Some((path, count)) => self.confirm_calibre(path, count, true),
+            None => self.choose_calibre(),
+        }
+    }
+
+    /// Asks how to bring in the Calibre library at `path`: use it where it is
+    /// (the Calibre folder becomes the library; the usual choice when leaving
+    /// Calibre for Word Hoard), or import a copy into the library folder.
+    fn confirm_calibre(
+        self: &Rc<Self>,
+        path: PathBuf,
+        count: Option<usize>,
+        can_choose_another: bool,
+    ) {
         let folder = self.folder.borrow().clone();
-        let books = count.map_or("The books".to_owned(), |n| {
-            format!("The {}", plural(n, "book", "books"))
+        let books = count.map_or("Its books".to_owned(), |n| {
+            format!("Its {}", plural(n, "book", "books"))
         });
         let dialog = adw::AlertDialog::new(
-            Some("Import Your Calibre Library?"),
+            Some("Use Your Calibre Library?"),
             Some(&format!(
-                "{books} in {} will be added to your library in {}, with their covers, series, tags and ratings.\n\nOn the same drive, books are linked rather than copied, so they take no extra space. Calibre’s library isn’t changed.",
+                "Word Hoard can use {} where it is: that folder becomes your library, with no copies made. {books} come with their covers, series, tags and ratings, and books you add later are filed there too. Calibre’s own database isn’t changed, so Calibre won’t know about books added in Word Hoard.\n\nOr import a copy into {}, leaving the Calibre library as it is. On the same drive, copies are linked, so they take no extra space.",
                 tidy(&path),
                 tidy(&folder)
             )),
         );
-        dialog.add_responses(&[
-            ("cancel", "Cancel"),
-            ("other", "Choose Another…"),
-            ("import", "Import"),
-        ]);
-        dialog.set_response_appearance("import", adw::ResponseAppearance::Suggested);
-        dialog.set_default_response(Some("import"));
+        dialog.add_response("cancel", "Cancel");
+        if can_choose_another {
+            dialog.add_response("other", "Choose Another…");
+        }
+        dialog.add_response("copy", "Import a Copy");
+        dialog.add_response("in-place", "Use It Where It Is");
+        dialog.set_response_appearance("in-place", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("in-place"));
         dialog.set_close_response("cancel");
         let this = self.clone();
         dialog.connect_response(None, move |_, response| match response {
-            "import" => this.finish(&folder, Start::Calibre(path.clone())),
+            "in-place" => this.finish(&path, Start::Calibre(path.clone())),
+            "copy" => this.finish(&folder, Start::Calibre(path.clone())),
             "other" => this.choose_calibre(),
             _ => {}
         });
@@ -399,7 +413,7 @@ impl Welcome {
         glib::spawn_future_local(async move {
             let start = this.calibre.borrow().as_ref().map(|(p, _)| p.clone());
             let Some(path) = this
-                .pick_folder("Choose Your Calibre Library", "Import", start.as_deref())
+                .pick_folder("Choose Your Calibre Library", "Choose", start.as_deref())
                 .await
             else {
                 return;
@@ -410,8 +424,8 @@ impl Welcome {
                     "Choose the folder that holds Calibre’s metadata.db (usually “Calibre Library” in your home folder).",
                 );
             }
-            let folder = this.folder.borrow().clone();
-            this.finish(&folder, Start::Calibre(path));
+            let count = calibre::count_books(&path);
+            this.confirm_calibre(path, count, false);
         });
     }
 

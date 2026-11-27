@@ -83,6 +83,13 @@ impl Window {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| chosen.display().to_string());
+        let movable = db.as_deref().and_then(location::folder_of).is_some();
+        if movable
+            && !location::is_library(&chosen)
+            && hoard_core::calibre::is_calibre_library(&chosen)
+        {
+            return self.confirm_calibre_in_place(prefs, chosen, db.unwrap_or_default());
+        }
         let dialog;
         if location::is_library(&chosen) {
             dialog = adw::AlertDialog::new(
@@ -96,7 +103,6 @@ impl Window {
             dialog.set_response_appearance("open", adw::ResponseAppearance::Suggested);
             dialog.set_default_response(Some("open"));
         } else {
-            let movable = db.as_deref().and_then(location::folder_of).is_some();
             dialog = adw::AlertDialog::new(
                 Some(&format!("Use “{name}” for Your Library?")),
                 Some(&if movable {
@@ -135,6 +141,160 @@ impl Window {
                 }
             }
             _ => {}
+        });
+        dialog.present(Some(&self.win));
+    }
+
+    /// The chosen folder is a Calibre library: offer to use its books where
+    /// they are, bringing this library's highlights, vocabulary and Kobo
+    /// records along (see `location::use_folder_in_place`).
+    fn confirm_calibre_in_place(
+        self: &Rc<Self>,
+        prefs: &adw::PreferencesDialog,
+        chosen: PathBuf,
+        db: PathBuf,
+    ) {
+        let dialog = adw::AlertDialog::new(
+            Some("Use Your Calibre Library Where It Is?"),
+            Some(&format!(
+                "{} becomes your library, and Word Hoard uses the books there instead of its own copies. Books that are in both are matched by their contents; any only in Word Hoard are moved there. Your highlights, vocabulary and Kobo records come along, and books in Calibre that Word Hoard doesn’t have yet are added.\n\nCalibre’s own database isn’t changed, so Calibre won’t know about books added in Word Hoard. Afterwards you can move the copies Word Hoard no longer uses to the Trash.",
+                chosen.display()
+            )),
+        );
+        dialog.add_responses(&[("cancel", "Cancel"), ("use", "Use in Place")]);
+        dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("use"));
+        dialog.set_close_response("cancel");
+        let this = self.clone();
+        let prefs = prefs.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response == "use" {
+                prefs.close();
+                this.use_in_place(db.clone(), chosen.clone());
+            }
+        });
+        dialog.present(Some(&self.win));
+    }
+
+    /// Re-homes the library onto `folder` (a Calibre library) in the
+    /// background, then brings in Calibre's details and any books it has that
+    /// the library doesn't, then offers to move the unused copies to Trash.
+    fn use_in_place(self: &Rc<Self>, db: PathBuf, folder: PathBuf) {
+        self.importing.set(true);
+        *self.lib.borrow_mut() = match Library::open_in_memory() {
+            Ok(lib) => lib,
+            Err(err) => {
+                self.importing.set(false);
+                return self.error("Couldn’t Use the Calibre Library", err);
+            }
+        };
+        self.start_progress("Matching your books with Calibre’s…");
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let job = (db.clone(), folder.clone());
+            let result =
+                gio::spawn_blocking(move || location::use_folder_in_place(&job.0, &job.1)).await;
+            this.importing.set(false);
+            this.set_progress(None);
+            let (open, outcome) = match result {
+                Ok(Ok(stats)) => (stats.db.clone(), Ok(stats)),
+                Ok(Err(err)) => (db, Err(err.to_string())),
+                Err(_) => (db, Err("Matching stopped unexpectedly.".to_owned())),
+            };
+            match Library::open(&open) {
+                Ok(lib) => *this.lib.borrow_mut() = lib,
+                Err(err) => return this.error("Couldn’t Open the Library", err),
+            }
+            let stats = match outcome {
+                Ok(stats) => stats,
+                Err(why) => {
+                    this.library_changed();
+                    return this.error(
+                        "Couldn’t Use the Calibre Library",
+                        format!("{why}\n\nYour library is still where it was."),
+                    );
+                }
+            };
+            if let Err(err) = location::set_current_library(&folder) {
+                this.error("Couldn’t Remember the Library Folder", err);
+            }
+            this.library_changed();
+            // Calibre's details, and its books the library didn't have.
+            this.import_calibre_from(folder.clone());
+            this.offer_trash_old_copies(stats);
+        });
+    }
+
+    /// After using a folder in place: offers to move the copies the library
+    /// no longer uses to the Trash (recoverable), then tidies empty folders.
+    fn offer_trash_old_copies(self: &Rc<Self>, stats: location::InPlaceStats) {
+        let copies: Vec<PathBuf> = stats
+            .old_copies
+            .into_iter()
+            .filter(|p| p.is_file())
+            .collect();
+        if copies.is_empty() {
+            return;
+        }
+        let size: u64 = copies
+            .iter()
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum();
+        let old_root = Some(stats.old_folder.clone());
+        let dialog = adw::AlertDialog::new(
+            Some("Move Unused Copies to the Trash?"),
+            Some(&format!(
+                "Your library now uses the books in your Calibre folder. The {} it used before{} ({}) are no longer needed. Moving them to the Trash frees the space; you can restore them from there.",
+                plural(copies.len(), "copy", "copies"),
+                old_root
+                    .as_ref()
+                    .map(|r| format!(" in {}", r.display()))
+                    .unwrap_or_default(),
+                glib::format_size(size)
+            )),
+        );
+        dialog.add_responses(&[("keep", "Keep Them"), ("trash", "Move to Trash")]);
+        dialog.set_response_appearance("trash", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("keep"));
+        dialog.set_close_response("keep");
+        let this = self.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "trash" {
+                return;
+            }
+            let mut failed = 0;
+            for copy in &copies {
+                if gio::File::for_path(copy)
+                    .trash(gio::Cancellable::NONE)
+                    .is_err()
+                {
+                    failed += 1;
+                    continue;
+                }
+                // Remove the folders left empty (never the books folder itself).
+                let mut dir = copy.clone();
+                while dir.pop()
+                    && old_root
+                        .as_ref()
+                        .is_some_and(|r| dir.starts_with(r) && dir != *r)
+                    && std::fs::remove_dir(&dir).is_ok()
+                {}
+            }
+            if failed > 0 {
+                this.error(
+                    "Some Copies Weren’t Moved",
+                    format!(
+                        "{} couldn’t be moved to the Trash.",
+                        plural(failed, "copy", "copies")
+                    ),
+                );
+            } else {
+                this.toast(&format!(
+                    "Moved {} to the Trash",
+                    plural(copies.len(), "copy", "copies")
+                ));
+            }
         });
         dialog.present(Some(&self.win));
     }
