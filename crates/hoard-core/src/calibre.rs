@@ -76,7 +76,7 @@ fn parse_date(s: Option<String>) -> Option<DateTime<Utc>> {
 pub fn find_libraries(home: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     let mut add = |p: PathBuf| {
-        if p.join("metadata.db").is_file() && !found.contains(&p) {
+        if !found.contains(&p) && is_calibre_library(&p) {
             found.push(p);
         }
     };
@@ -137,12 +137,34 @@ fn search_for_libraries(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         .collect();
     dirs.sort();
     for dir in dirs {
-        if dir.join("metadata.db").is_file() {
+        if is_calibre_library(&dir) {
             found.push(dir);
         } else if depth > 1 {
             search_for_libraries(&dir, depth - 1, found);
         }
     }
+}
+
+/// Whether `folder` holds a Calibre library: a `metadata.db` that is an
+/// SQLite database with Calibre's `books` and `authors` tables (another
+/// program's file of the same name doesn't count). Opened read-only.
+pub fn is_calibre_library(folder: &Path) -> bool {
+    let db = folder.join("metadata.db");
+    if !db.is_file() {
+        return false;
+    }
+    let Ok(conn) = Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('books', 'authors')",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .is_ok_and(|n| n == 2)
 }
 
 /// How many books a Calibre library has (read-only; `None` if unreadable).
@@ -678,12 +700,25 @@ pub(crate) mod tests {
     fn finds_calibre_libraries() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
-        let lib = |p: &str| {
+        let db = |p: &str, sql: &str| {
             let p = home.join(p);
             std::fs::create_dir_all(&p).unwrap();
-            std::fs::write(p.join("metadata.db"), b"").unwrap();
+            Connection::open(p.join("metadata.db"))
+                .unwrap()
+                .execute_batch(sql)
+                .unwrap();
             p
         };
+        let lib = |p: &str| {
+            db(
+                p,
+                "CREATE TABLE books (id INTEGER); CREATE TABLE authors (id INTEGER);",
+            )
+        };
+        // Another program's metadata.db, and a file that isn't a database.
+        db("Photos/Album", "CREATE TABLE photos (id INTEGER);");
+        std::fs::create_dir_all(home.join("Notes")).unwrap();
+        std::fs::write(home.join("Notes/metadata.db"), b"not a database").unwrap();
         let remembered = lib("Elsewhere/Remembered");
         let usual = lib("Calibre Library");
         let synced = lib("Nextcloud/books");
@@ -695,6 +730,9 @@ pub(crate) mod tests {
             format!(r#"{{"library_path": "{}"}}"#, remembered.display()),
         )
         .unwrap();
-        assert_eq!(find_libraries(home), [remembered, usual, synced]);
+        assert_eq!(find_libraries(home), [remembered, usual, synced.clone()]);
+        assert!(is_calibre_library(&synced));
+        assert!(!is_calibre_library(&home.join("Photos/Album")));
+        assert!(!is_calibre_library(&home.join("Notes")));
     }
 }

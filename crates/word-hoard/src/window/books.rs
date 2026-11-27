@@ -147,7 +147,7 @@ impl Window {
     /// hard-linked where they can be (same drive: no extra space; Calibre's
     /// files aren't changed), copied otherwise.
     pub(crate) fn import_calibre_from(self: &Rc<Self>, path: PathBuf) {
-        if !path.join("metadata.db").is_file() {
+        if !hoard_core::calibre::is_calibre_library(&path) {
             return self.error(
                 "Not a Calibre Library",
                 "Choose the folder that holds Calibre’s metadata.db (usually “Calibre Library” in your home folder).",

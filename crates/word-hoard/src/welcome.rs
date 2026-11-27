@@ -404,7 +404,7 @@ impl Welcome {
             else {
                 return;
             };
-            if !path.join("metadata.db").is_file() {
+            if !calibre::is_calibre_library(&path) {
                 return this.error(
                     "Not a Calibre Library",
                     "Choose the folder that holds Calibre’s metadata.db (usually “Calibre Library” in your home folder).",
