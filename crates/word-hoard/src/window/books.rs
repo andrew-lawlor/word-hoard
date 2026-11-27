@@ -164,101 +164,201 @@ impl Window {
         });
     }
 
-    /// Shows Send to Kobo on a book's page while a Kobo is connected.
-    pub(super) fn update_send_button(&self) {
-        let on_book = matches!(self.current.get(), Nav::Annotations(View::Book(_)));
-        self.send_button
-            .set_visible(on_book && self.kobo.borrow().is_some());
-        self.send_button
-            .set_tooltip_text(Some(&format!("Send to Your {}", self.kobo_name())));
-    }
-
-    /// Sends the book on screen to the connected Kobo, after showing what
-    /// will be written and asking.
-    pub(super) fn send_current_book(self: &Rc<Self>) {
-        let Nav::Annotations(View::Book(id)) = self.current.get() else {
+    /// Sends the chosen books to the connected Kobo: works out what would be
+    /// written, shows it and asks, then sends in the background with a
+    /// running count. Planning and sending both run off the UI thread.
+    pub(super) fn send_books(self: &Rc<Self>, ids: Vec<i64>) {
+        if ids.is_empty() {
             return;
-        };
+        }
         let Some(root) = self.kobo.borrow().as_ref().map(|k| k.root.clone()) else {
             return self.error(
                 "No Kobo Connected",
                 "Connect your Kobo with a USB cable to send books to it.",
             );
         };
-        let plan = match self.lib.borrow().plan_send(&root, &[id]) {
-            Ok(plan) => plan,
-            Err(err) => return self.error("Couldn’t Send the Book", err),
+        let Some(db) = self.lib.borrow().path().map(Path::to_path_buf) else {
+            return;
         };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let plan = {
+                let (db, root) = (db.clone(), root.clone());
+                gio::spawn_blocking(move || hoard_core::Library::open(&db)?.plan_send(&root, &ids))
+                    .await
+            };
+            let plan = match plan {
+                Ok(Ok(plan)) => plan,
+                Ok(Err(err)) => return this.error("Couldn’t Send to the Kobo", err),
+                Err(_) => {
+                    return this.error(
+                        "Couldn’t Send to the Kobo",
+                        "Planning stopped unexpectedly.",
+                    );
+                }
+            };
+            this.confirm_send(plan, db, root);
+        });
+    }
+
+    fn confirm_send(
+        self: &Rc<Self>,
+        plan: hoard_core::store::send::SendPlan,
+        db: std::path::PathBuf,
+        root: std::path::PathBuf,
+    ) {
+        use hoard_core::store::send::SendAction;
         let name = self.kobo_name();
-        let Some(item) = plan.items.first().cloned() else {
-            let reason = plan
-                .skipped
-                .first()
-                .map_or("nothing to send", |s| s.reason.as_str());
-            return self.toast(&format!("Not sent: {reason}"));
+        let skipped = summarize_skipped(&plan.skipped);
+        if plan.items.is_empty() {
+            return self.toast(&format!("Nothing to send: {skipped}"));
+        }
+        let converted = plan
+            .items
+            .iter()
+            .filter(|i| i.action == SendAction::Convert)
+            .count();
+        let copied = plan.items.len() - converted;
+        let mut body = match plan.items.as_slice() {
+            [one] => format!(
+                "“{}” will be {} to {}.",
+                one.title,
+                if converted == 1 {
+                    "converted for the Kobo and copied"
+                } else {
+                    "copied"
+                },
+                one.dest.display()
+            ),
+            items => {
+                let mut how = Vec::new();
+                if converted > 0 {
+                    how.push(format!("{converted} converted for the Kobo"));
+                }
+                if copied > 0 {
+                    how.push(format!("{copied} copied as they are"));
+                }
+                format!(
+                    "{} ({}).",
+                    plural(items.len(), "book", "books"),
+                    how.join(", ")
+                )
+            }
         };
-        let how = match item.action {
-            hoard_core::store::send::SendAction::Convert => "converted for the Kobo and copied",
-            hoard_core::store::send::SendAction::Copy => "copied",
+        body.push_str(&format!(
+            " {} in all.",
+            glib::format_size(plan.total_size())
+        ));
+        if !plan.skipped.is_empty() {
+            body.push_str(&format!("\n\nNot sent: {skipped}."));
+        }
+        body.push_str("\n\nWord Hoard backs up the Kobo’s database first and changes nothing else on it. Eject the Kobo afterwards and it adds the books.");
+        let heading = match plan.items.len() {
+            1 => format!("Send a Book to Your {name}?"),
+            n => format!("Send {n} Books to Your {name}?"),
         };
-        let dialog = adw::AlertDialog::new(
-            Some(&format!("Send to Your {name}?")),
-            Some(&format!(
-                "“{}” will be {how} to {} ({}). Word Hoard backs up the Kobo’s database first and changes nothing else on it.\n\nEject the Kobo afterwards and it adds the book.",
-                item.title,
-                item.dest.display(),
-                glib::format_size(item.size)
-            )),
-        );
+        let dialog = adw::AlertDialog::new(Some(&heading), Some(&body));
         dialog.add_responses(&[("cancel", "Cancel"), ("send", "Send")]);
         dialog.set_response_appearance("send", adw::ResponseAppearance::Suggested);
         dialog.set_default_response(Some("send"));
         dialog.set_close_response("cancel");
         let this = self.clone();
         dialog.connect_response(None, move |_, response| {
-            if response != "send" {
-                return;
+            if response == "send" {
+                this.apply_send(plan.clone(), db.clone(), root.clone());
             }
-            let Some(db) = this.lib.borrow().path().map(Path::to_path_buf) else {
-                return;
-            };
-            let Some(backups) = this
-                .lib
-                .borrow()
-                .assets_dir()
-                .map(|d| d.join("backups/kobo"))
-            else {
-                return;
-            };
-            let (this, plan, root, title) =
-                (this.clone(), plan.clone(), root.clone(), item.title.clone());
-            this.start_progress(&format!("Sending “{title}”…"));
-            glib::spawn_future_local(async move {
-                let result = gio::spawn_blocking(move || {
-                    let lib = hoard_core::Library::open(&db)?;
-                    let writer = hoard_core::kobo::writer::DeviceWriter::open(&root, &backups)?;
-                    lib.apply_send(&writer, &plan, |_, _| {})
-                })
-                .await;
-                this.set_progress(None);
-                match result {
-                    Ok(Ok(stats)) if stats.failed.is_empty() => {
-                        this.toast(&format!("Sent “{title}”. Eject your {name} to add it."))
-                    }
-                    Ok(Ok(stats)) => this.error(
-                        "Couldn’t Send the Book",
-                        stats
-                            .failed
-                            .iter()
-                            .map(|(_, why)| why.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    ),
-                    Ok(Err(err)) => this.error("Couldn’t Send the Book", err),
-                    Err(_) => this.error("Couldn’t Send the Book", "Sending stopped unexpectedly."),
-                }
-            });
         });
         dialog.present(Some(&self.win));
+    }
+
+    fn apply_send(
+        self: &Rc<Self>,
+        plan: hoard_core::store::send::SendPlan,
+        db: std::path::PathBuf,
+        root: std::path::PathBuf,
+    ) {
+        let Some(backups) = self
+            .lib
+            .borrow()
+            .assets_dir()
+            .map(|d| d.join("backups/kobo"))
+        else {
+            return;
+        };
+        let name = self.kobo_name();
+        let total = plan.items.len();
+        self.start_progress(&format!("Sending {}…", plural(total, "book", "books")));
+        let done = std::sync::Arc::new(AtomicUsize::new(0));
+        let ticking = Rc::new(Cell::new(true));
+        {
+            let (this, done, ticking) = (self.clone(), done.clone(), ticking.clone());
+            glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+                if !ticking.get() {
+                    return glib::ControlFlow::Break;
+                }
+                let n = done.load(Ordering::Relaxed);
+                this.set_progress(Some(&format!("Sending to your {name}… {n} of {total}")));
+                glib::ControlFlow::Continue
+            });
+        }
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let job_done = done.clone();
+            let result = gio::spawn_blocking(move || {
+                let lib = hoard_core::Library::open(&db)?;
+                let writer = hoard_core::kobo::writer::DeviceWriter::open(&root, &backups)?;
+                lib.apply_send(&writer, &plan, |n, _| job_done.store(n, Ordering::Relaxed))
+            })
+            .await;
+            ticking.set(false);
+            this.set_progress(None);
+            match result {
+                Ok(Ok(stats)) => {
+                    if !stats.failed.is_empty() {
+                        this.error(
+                            &format!(
+                                "Couldn’t Send {}",
+                                plural(stats.failed.len(), "Book", "Books")
+                            ),
+                            stats
+                                .failed
+                                .iter()
+                                .map(|(title, why)| format!("{title}: {why}"))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        );
+                    }
+                    this.refresh_on_device();
+                    if stats.sent > 0 {
+                        this.toast(&format!(
+                            "Sent {}. Eject your {name} to add them.",
+                            plural(stats.sent, "book", "books")
+                        ));
+                        this.set_selecting(false);
+                    }
+                }
+                Ok(Err(err)) => this.error("Couldn’t Send to the Kobo", err),
+                Err(_) => this.error("Couldn’t Send to the Kobo", "Sending stopped unexpectedly."),
+            }
+        });
+    }
+}
+
+/// "2 already on the Kobo, 1 with no file" from the reasons books were skipped.
+fn summarize_skipped(skipped: &[hoard_core::store::send::Skipped]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for s in skipped {
+        match counts.iter_mut().find(|(r, _)| *r == s.reason) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((&s.reason, 1)),
+        }
+    }
+    match skipped {
+        [one] => format!("“{}”, {}", one.title, one.reason),
+        _ => counts
+            .iter()
+            .map(|(reason, n)| format!("{n} {reason}"))
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }

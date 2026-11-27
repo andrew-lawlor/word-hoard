@@ -261,6 +261,32 @@ impl Library {
         Ok(stats)
     }
 
+    /// The books on the Kobo mounted at `mount`: those with a copy recorded
+    /// there that still exists (a store book, or a sideloaded file that's
+    /// present), as [`Self::plan_send`] judges it.
+    pub fn books_on_device(&self, mount: &Path) -> Result<std::collections::HashSet<i64>> {
+        let device = DeviceInfo::identify(mount)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT s.book_id, s.volume_id FROM book_source s JOIN device d ON d.id = s.device_id
+             WHERE d.serial = ?1",
+        )?;
+        let rows = stmt.query_map([&device.serial], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut on = std::collections::HashSet::new();
+        for row in rows {
+            let (id, volume) = row?;
+            let present = match volume.strip_prefix("file:///mnt/onboard/") {
+                Some(rel) => mount.join(rel).is_file(),
+                None => true,
+            };
+            if present {
+                on.insert(id);
+            }
+        }
+        Ok(on)
+    }
+
     fn upsert_device(&self, d: &DeviceInfo) -> Result<i64> {
         Ok(self.conn.query_row(
             "INSERT INTO device (serial, model_id, firmware, first_seen_at, last_seen_at)
@@ -342,6 +368,8 @@ mod tests {
         let mut zip = zip::ZipArchive::new(std::fs::File::open(&sent).unwrap()).unwrap();
         assert_eq!(zip.by_index(0).unwrap().name(), "mimetype");
 
+        assert_eq!(lib.books_on_device(&kobo).unwrap(), [dune].into());
+
         // Remembered: the next plan skips it.
         let again = lib.plan_send(&kobo, &[dune]).unwrap();
         assert!(again.items.is_empty());
@@ -373,6 +401,7 @@ mod tests {
 
         // Deleted from the Kobo (but still recorded): it can be sent again.
         std::fs::remove_file(&sent).unwrap();
+        assert!(lib.books_on_device(&kobo).unwrap().is_empty());
         let after_delete = lib.plan_send(&kobo, &[dune]).unwrap();
         assert_eq!(after_delete.items.len(), 1, "{:?}", after_delete.skipped);
     }

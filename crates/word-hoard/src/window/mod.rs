@@ -207,7 +207,6 @@ pub struct Window {
     books_shown: Cell<usize>,
     book_sort: gtk::DropDown,
     add_books_button: gtk::Button,
-    send_button: gtk::Button,
     back: gtk::Button,
     /// The current book was opened from the Books page (Back returns there).
     from_books: Cell<bool>,
@@ -307,33 +306,13 @@ impl Window {
             .build();
         add_books.update_property(&[gtk::accessible::Property::Label("Add Books")]);
         header.pack_start(&add_books);
-        let send_button = gtk::Button::builder()
-            .child(
-                &adw::ButtonContent::builder()
-                    .icon_name("document-send-symbolic")
-                    .label("Send to Kobo")
-                    .build(),
-            )
-            .action_name("win.send-book")
-            .css_classes(["suggested-action"])
-            .visible(false)
-            .build();
-        header.pack_end(&send_button);
         let book_sort = gtk::DropDown::from_strings(&["Recent", "Title", "Author"]);
         book_sort.set_tooltip_text(Some("Sort books"));
         book_sort.update_property(&[gtk::accessible::Property::Label("Sort books")]);
         book_sort.set_visible(false);
         header.pack_end(&book_sort);
-        // Filled in once the window exists: the Library opens books through it.
-        let opener: Rc<RefCell<std::rc::Weak<Window>>> = Rc::default();
-        let library = {
-            let opener = opener.clone();
-            library::build(&lib, move |id| {
-                if let Some(this) = opener.borrow().upgrade() {
-                    this.navigate(Nav::Annotations(View::Book(id)), true);
-                }
-            })
-        };
+        let library = library::build(&lib);
+        header.pack_end(&library.select_toggle);
         header.pack_end(&library.toggles);
         let search = gtk::SearchEntry::builder()
             .placeholder_text("Search text, notes, books and tags")
@@ -427,6 +406,7 @@ impl Window {
         content_toolbar.add_top_bar(&tip);
         content_toolbar.add_top_bar(&search_bar);
         content_toolbar.add_bottom_bar(&selection_bar);
+        content_toolbar.add_bottom_bar(&library.bar);
         content_toolbar.set_content(Some(&stack));
         let content_page = adw::NavigationPage::new(&content_toolbar, "Inbox");
 
@@ -485,16 +465,14 @@ impl Window {
             books_shown: Cell::new(0),
             book_sort,
             add_books_button: add_books,
-            send_button,
             back,
             from_books: Cell::new(false),
             recent_ids: RefCell::default(),
             current: Cell::new(Nav::Library),
             dictionaries: RefCell::default(),
         });
-        *opener.borrow_mut() = Rc::downgrade(&this);
         this.setup_list();
-        this.connect_library_toggles();
+        this.connect_library();
         this.setup_signals();
         this.setup_actions();
         this.load_dictionaries();
@@ -520,6 +498,15 @@ impl Window {
             let this = self.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
                 this.eject()
+            });
+        }
+        // Development only: `WORD_HOARD_OPEN=select-all` selects every book
+        // in the Library, as Ctrl+A does.
+        if cfg!(debug_assertions) && std::env::var("WORD_HOARD_OPEN").as_deref() == Ok("select-all")
+        {
+            let this = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+                this.select_all_books();
             });
         }
         // Development only: `WORD_HOARD_OPEN=book:<id>` opens on a book's page
@@ -882,6 +869,5 @@ impl Window {
         self.add_win_action("shortcuts", |this| shortcuts::present(&this.win));
         self.add_win_action("add-books", |this| this.add_books());
         self.add_win_action("import-calibre", |this| this.import_calibre());
-        self.add_win_action("send-book", |this| this.send_current_book());
     }
 }

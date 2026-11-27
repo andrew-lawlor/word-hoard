@@ -93,6 +93,7 @@ impl Window {
                     this.enrich_vocab();
                     this.rebuild_sidebar();
                     this.reload();
+                    this.refresh_on_device();
                     this.import_toast(&stats);
                     this.warn_if_untested(&device, db_version);
                     this.auto_sync_obsidian();
@@ -219,7 +220,8 @@ impl Window {
                 .is_some_and(|k| Some(&k.root) == root.as_ref());
             if ours {
                 this.kobo.replace(None);
-                this.update_send_button();
+                this.update_send_action();
+                this.refresh_on_device();
                 this.banner.set_revealed(false);
             }
         });
@@ -303,7 +305,8 @@ impl Window {
             root: root.clone(),
             name,
         }));
-        self.update_send_button();
+        self.update_send_action();
+        self.refresh_on_device();
         match self.on_connect_setting() {
             OnConnect::Import => self.import_from(root),
             OnConnect::Ask => self.set_banner(
@@ -342,7 +345,8 @@ impl Window {
             match result {
                 Ok(()) => {
                     this.kobo.replace(None);
-                    this.update_send_button();
+                    this.update_send_action();
+                    this.refresh_on_device();
                     this.banner.set_revealed(false);
                     this.toast(&format!("You can unplug your {name}"));
                 }
