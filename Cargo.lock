@@ -2026,6 +2026,7 @@ dependencies = [
  "image",
  "libadwaita",
  "pangocairo",
+ "tempfile",
 ]
 
 [[package]]

@@ -42,3 +42,6 @@ assets = [
     ["data/THIRD-PARTY.md", "usr/share/doc/word-hoard/", "644"],
     ["data/fonts/OFL.txt", "usr/share/doc/word-hoard/OFL-Literata.txt", "644"],
 ]
+
+[dev-dependencies]
+tempfile.workspace = true

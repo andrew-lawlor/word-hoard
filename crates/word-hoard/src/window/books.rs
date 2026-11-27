@@ -36,42 +36,80 @@ impl Window {
         });
     }
 
-    fn add_book_files(self: &Rc<Self>, paths: &[std::path::PathBuf]) {
-        let (mut added, mut known, mut failed) = (0usize, 0usize, Vec::new());
-        {
-            let lib = self.lib.borrow();
-            for path in paths {
-                match lib.add_file(path, AddMode::Copy) {
-                    Ok(a) if a.outcome == AddOutcome::AlreadyInLibrary => known += 1,
-                    Ok(_) => added += 1,
-                    Err(err) => failed.push(format!(
-                        "{}: {err}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    )),
+    /// Adds books to the library in a background thread (copying them into
+    /// the books folder), then shows what happened. Folders are searched for
+    /// EPUBs; other files are counted as skipped.
+    pub(super) fn add_book_files(self: &Rc<Self>, paths: &[std::path::PathBuf]) {
+        let (books, skipped) = collect_books(paths);
+        if books.is_empty() {
+            return self.toast(if skipped > 0 {
+                "Only EPUB books can be added"
+            } else {
+                "No books to add"
+            });
+        }
+        if self.importing.get() {
+            return self.toast("Still importing. Add books when it’s done.");
+        }
+        let Some(db) = self.lib.borrow().path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.importing.set(true);
+        self.start_progress(&format!("Adding {}…", plural(books.len(), "book", "books")));
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || {
+                let lib = hoard_core::Library::open(&db)?;
+                let (mut added, mut known, mut failed) = (0usize, 0usize, Vec::new());
+                for path in &books {
+                    match lib.add_file(path, AddMode::Copy) {
+                        Ok(a) if a.outcome == AddOutcome::AlreadyInLibrary => known += 1,
+                        Ok(_) => added += 1,
+                        Err(err) => failed.push(format!(
+                            "{}: {err}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        )),
+                    }
                 }
+                hoard_core::Result::Ok((added, known, failed))
+            })
+            .await;
+            this.importing.set(false);
+            this.set_progress(None);
+            let (added, known, failed) = match result {
+                Ok(Ok(r)) => r,
+                Ok(Err(err)) => return this.error("Couldn’t Add Books", err),
+                Err(_) => return this.error("Couldn’t Add Books", "Adding stopped unexpectedly."),
+            };
+            this.rebuild_sidebar();
+            this.reload();
+            this.refresh_on_device();
+            if !failed.is_empty() {
+                this.error(
+                    &format!("Couldn’t Add {}", plural(failed.len(), "Book", "Books")),
+                    failed.join("\n"),
+                );
             }
-        }
-        self.rebuild_sidebar();
-        self.reload();
-        if !failed.is_empty() {
-            self.error(
-                &format!("Couldn’t Add {}", plural(failed.len(), "Book", "Books")),
-                failed.join("\n"),
-            );
-        }
-        let mut parts = Vec::new();
-        if added > 0 {
-            parts.push(format!("Added {}", plural(added, "book", "books")));
-        }
-        if known > 0 {
-            parts.push(format!(
-                "{} already in the library",
-                plural(known, "book", "books")
-            ));
-        }
-        if !parts.is_empty() {
-            self.toast(&parts.join(" · "));
-        }
+            let mut parts = Vec::new();
+            if added > 0 {
+                parts.push(format!("Added {}", plural(added, "book", "books")));
+            }
+            if known > 0 {
+                parts.push(format!(
+                    "{} already in the library",
+                    plural(known, "book", "books")
+                ));
+            }
+            if skipped > 0 {
+                parts.push(format!(
+                    "{} skipped (not EPUB)",
+                    plural(skipped, "file", "files")
+                ));
+            }
+            if !parts.is_empty() {
+                this.toast(&parts.join(" · "));
+            }
+        });
     }
 
     /// Asks for a Calibre library folder and imports it in the background.
@@ -371,5 +409,72 @@ fn summarize_skipped(skipped: &[hoard_core::store::send::Skipped]) -> String {
             .map(|(reason, n)| format!("{n} {reason}"))
             .collect::<Vec<_>>()
             .join(", "),
+    }
+}
+
+/// The EPUBs among `paths`, looking inside folders (not hidden ones), and
+/// how many other files were left out.
+fn collect_books(paths: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, usize) {
+    fn is_epub(path: &Path) -> bool {
+        path.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("epub"))
+    }
+    fn walk(path: &Path, books: &mut Vec<std::path::PathBuf>, skipped: &mut usize, depth: usize) {
+        if path.is_dir() {
+            if depth > 8 {
+                return;
+            }
+            let Ok(entries) = std::fs::read_dir(path) else {
+                return;
+            };
+            let mut children: Vec<_> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    !p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                })
+                .collect();
+            children.sort();
+            for child in children {
+                walk(&child, books, skipped, depth + 1);
+            }
+        } else if is_epub(path) {
+            books.push(path.to_path_buf());
+        } else if path.is_file() {
+            *skipped += 1;
+        }
+    }
+    let (mut books, mut skipped) = (Vec::new(), 0);
+    for path in paths {
+        walk(path, &mut books, &mut skipped, 0);
+    }
+    books.dedup();
+    (books, skipped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collects_epubs_from_files_and_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::create_dir_all(d.join("Shelf/Author")).unwrap();
+        std::fs::create_dir_all(d.join("Shelf/.hidden")).unwrap();
+        for f in [
+            "a.epub",
+            "notes.txt",
+            "Shelf/Author/b.EPUB",
+            "Shelf/cover.jpg",
+            "Shelf/.hidden/c.epub",
+        ] {
+            std::fs::write(d.join(f), b"").unwrap();
+        }
+        let (books, skipped) =
+            collect_books(&[d.join("a.epub"), d.join("notes.txt"), d.join("Shelf")]);
+        assert_eq!(books, [d.join("a.epub"), d.join("Shelf/Author/b.EPUB")]);
+        assert_eq!(skipped, 2);
     }
 }

@@ -501,6 +501,29 @@ impl Window {
 
     /// Grid/list toggle, opening and choosing books, and the select-mode bar.
     pub(super) fn connect_library(self: &Rc<Self>) {
+        // Books (or folders of them) dropped anywhere on the window are added.
+        let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+        let weak = Rc::downgrade(self);
+        drop.connect_drop(move |_, value, _, _| {
+            let (Some(this), Ok(files)) = (weak.upgrade(), value.get::<gdk::FileList>()) else {
+                return false;
+            };
+            let paths: Vec<std::path::PathBuf> =
+                files.files().iter().filter_map(|f| f.path()).collect();
+            if paths.is_empty() {
+                return false;
+            }
+            if this.current.get() != Nav::Library {
+                this.navigate(Nav::Library, true);
+            }
+            this.add_book_files(&paths);
+            true
+        });
+        if let Some(root) = self.win.content() {
+            root.add_css_class("drop-books");
+            root.add_controller(drop);
+        }
+
         // Ctrl+A selects every book listed; Escape leaves select mode.
         let keys = gtk::EventControllerKey::new();
         let weak = Rc::downgrade(self);

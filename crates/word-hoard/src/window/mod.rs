@@ -302,7 +302,7 @@ impl Window {
         header.pack_start(&back);
         let add_books = gtk::Button::builder()
             .icon_name("list-add-symbolic")
-            .tooltip_text("Add Books (Ctrl+O)")
+            .tooltip_text("Add Books (Ctrl+O), or drop them on the window")
             .action_name("win.add-books")
             .visible(false)
             .build();
