@@ -74,7 +74,72 @@ pub struct SendStats {
     pub backup: PathBuf,
 }
 
+/// Books to remove from a Kobo, and those that can't be.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RemovePlan {
+    pub serial: String,
+    /// (book ID, title, path on the Kobo relative to its storage).
+    pub items: Vec<(i64, String, PathBuf)>,
+    pub skipped: Vec<Skipped>,
+}
+
 impl Library {
+    /// Which of `book_ids` can be removed from the Kobo at `mount`: books
+    /// sideloaded there (sent by Word Hoard or otherwise) whose files are
+    /// present. Store books, and books not on it, are skipped. Writes nothing.
+    pub fn plan_remove(&self, mount: &Path, book_ids: &[i64]) -> Result<RemovePlan> {
+        let device = DeviceInfo::identify(mount)?;
+        let mut plan = RemovePlan {
+            serial: device.serial.clone(),
+            ..Default::default()
+        };
+        for &id in book_ids {
+            let Some(book) = self.book(id)? else { continue };
+            let volumes: Vec<String> = self
+                .conn
+                .prepare(
+                    "SELECT s.volume_id FROM book_source s JOIN device d ON d.id = s.device_id
+                     WHERE d.serial = ?1 AND s.book_id = ?2",
+                )?
+                .query_map(params![device.serial, id], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let files: Vec<PathBuf> = volumes
+                .iter()
+                .filter_map(|v| v.strip_prefix("file:///mnt/onboard/"))
+                .map(PathBuf::from)
+                .filter(|rel| mount.join(rel).is_file())
+                .collect();
+            let store = volumes.iter().any(|v| !v.starts_with("file://"));
+            if files.is_empty() {
+                plan.skipped.push(Skipped {
+                    book_id: id,
+                    title: book.title.clone(),
+                    reason: if store {
+                        "bought from the Kobo store (remove it on the Kobo)"
+                    } else {
+                        "not on this Kobo"
+                    }
+                    .to_owned(),
+                });
+                continue;
+            }
+            for rel in files {
+                plan.items.push((id, book.title.clone(), rel));
+            }
+        }
+        Ok(plan)
+    }
+
+    /// Removes the books in an approved plan from the Kobo through `writer`
+    /// (which backed up its database). Returns how many files were deleted.
+    pub fn apply_remove(&self, writer: &DeviceWriter, plan: &RemovePlan) -> Result<usize> {
+        if writer.device().serial != plan.serial {
+            return Err(Error::NotAKobo(PathBuf::from(&plan.serial)));
+        }
+        let paths: Vec<PathBuf> = plan.items.iter().map(|(_, _, rel)| rel.clone()).collect();
+        writer.remove_books(&paths)
+    }
+
     /// What sending `book_ids` to the Kobo at `mount` would do. Writes
     /// nothing anywhere.
     pub fn plan_send(&self, mount: &Path, book_ids: &[i64]) -> Result<SendPlan> {
@@ -529,6 +594,56 @@ mod tests {
             lib.update_kobo_details(&kobo, &backups),
             Err(Error::UntestedKoboDb(999))
         ));
+    }
+
+    #[test]
+    fn removes_books_from_the_kobo_and_can_send_them_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fake_kobo(&kobo);
+        let lib = Library::open(&dir.path().join("data/library.db")).unwrap();
+        lib.set_books_root(&dir.path().join("Books")).unwrap();
+        let src = dir.path().join("dune.epub");
+        epub(&src, "Dune", "Frank Herbert");
+        let dune = lib.add_file(&src, AddMode::Copy).unwrap().book_id;
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        lib.apply_send(&writer, &lib.plan_send(&kobo, &[dune]).unwrap(), |_, _| {})
+            .unwrap();
+        // The Kobo adds it on eject: a stand-in database with its row.
+        crate::kobo::details::tests::fake_kobo_db(&kobo.join(".kobo/KoboReader.sqlite"), 176);
+        rusqlite::Connection::open(kobo.join(".kobo/KoboReader.sqlite"))
+            .unwrap()
+            .execute(
+                "INSERT INTO content (ContentID, ContentType, Title) VALUES (?1, 6, 'Dune')",
+                ["file:///mnt/onboard/Books/Frank Herbert/Dune.kepub.epub"],
+            )
+            .unwrap();
+
+        let plan = lib.plan_remove(&kobo, &[dune]).unwrap();
+        assert_eq!(plan.items.len(), 1);
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        assert_eq!(lib.apply_remove(&writer, &plan).unwrap(), 1);
+        assert!(
+            !kobo.join("Books/Frank Herbert").exists(),
+            "file and empty folder gone"
+        );
+        assert!(kobo.join("Books").is_dir(), "the books folder stays");
+        let rows: i64 = rusqlite::Connection::open(kobo.join(".kobo/KoboReader.sqlite"))
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM content WHERE Title = 'Dune'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+        assert!(lib.books_on_device(&kobo).unwrap().is_empty());
+        // Not on it any more: nothing to remove; and it can be sent again.
+        assert_eq!(
+            lib.plan_remove(&kobo, &[dune]).unwrap().skipped[0].reason,
+            "not on this Kobo"
+        );
+        assert_eq!(lib.plan_send(&kobo, &[dune]).unwrap().items.len(), 1);
     }
 
     #[test]

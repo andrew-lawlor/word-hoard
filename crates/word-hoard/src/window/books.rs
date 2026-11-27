@@ -491,6 +491,114 @@ impl Window {
     }
 }
 
+impl Window {
+    /// Removes the chosen books from the connected Kobo, after asking: their
+    /// files and the Kobo's records of them, keeping highlights. Planning and
+    /// removing run in the background; one change to the Kobo at a time.
+    pub(super) fn remove_books_from_kobo(self: &Rc<Self>, ids: Vec<i64>) {
+        if ids.is_empty() || self.sending.get() {
+            return;
+        }
+        let Some(root) = self.kobo.borrow().as_ref().map(|k| k.root.clone()) else {
+            return;
+        };
+        let Some(db) = self.lib.borrow().path().map(Path::to_path_buf) else {
+            return;
+        };
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let plan = {
+                let (db, root) = (db.clone(), root.clone());
+                gio::spawn_blocking(move || {
+                    hoard_core::Library::open(&db)?.plan_remove(&root, &ids)
+                })
+                .await
+            };
+            let plan = match plan {
+                Ok(Ok(plan)) => plan,
+                Ok(Err(err)) => return this.error("Couldn’t Remove from the Kobo", err),
+                Err(_) => return,
+            };
+            if plan.items.is_empty() {
+                return this.toast(&format!(
+                    "Nothing to remove: {}",
+                    summarize_skipped(&plan.skipped)
+                ));
+            }
+            let name = this.kobo_name();
+            let books: std::collections::BTreeSet<i64> = plan.items.iter().map(|i| i.0).collect();
+            let heading = match books.len() {
+                1 => format!("Remove “{}” from Your {name}?", plan.items[0].1),
+                n => format!("Remove {n} Books from Your {name}?"),
+            };
+            let mut body = if books.len() == 1 {
+                "Its file is deleted from the Kobo, along with the Kobo’s records of it, so it doesn’t come back. It stays in your library, and so do your highlights: send it again and the Kobo shows them again.".to_owned()
+            } else {
+                "Their files are deleted from the Kobo, along with the Kobo’s records of them, so they don’t come back. They stay in your library, and so do your highlights: send a book again and the Kobo shows its highlights again.".to_owned()
+            };
+            if !plan.skipped.is_empty() {
+                body.push_str(&format!(
+                    "\n\nNot removed: {}.",
+                    summarize_skipped(&plan.skipped)
+                ));
+            }
+            body.push_str("\n\nWord Hoard backs up the Kobo’s database first.");
+            let dialog = adw::AlertDialog::new(Some(&heading), Some(&body));
+            dialog.add_responses(&[("cancel", "Cancel"), ("remove", "Remove")]);
+            dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            let this2 = this.clone();
+            dialog.connect_response(None, move |_, response| {
+                if response == "remove" {
+                    this2.set_selecting(false);
+                    this2.apply_remove(plan.clone(), db.clone(), root.clone());
+                }
+            });
+            dialog.present(Some(&this.win));
+        });
+    }
+
+    fn apply_remove(
+        self: &Rc<Self>,
+        plan: hoard_core::store::send::RemovePlan,
+        db: std::path::PathBuf,
+        root: std::path::PathBuf,
+    ) {
+        if self.sending.replace(true) {
+            return;
+        }
+        self.update_send_action();
+        let name = self.kobo_name();
+        self.start_progress(&format!("Removing books from your {name}…"));
+        let backups = hoard_core::local_dir().join("backups/kobo");
+        let this = self.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || {
+                let lib = hoard_core::Library::open(&db)?;
+                let writer = hoard_core::kobo::writer::DeviceWriter::open(&root, &backups)?;
+                lib.apply_remove(&writer, &plan)
+            })
+            .await;
+            this.sending.set(false);
+            this.set_progress(None);
+            this.refresh_on_device();
+            this.update_send_action();
+            match result {
+                Ok(Ok(n)) => this.toast(&format!(
+                    "Removed {} from your {name}. Eject it to see the change.",
+                    plural(n, "book", "books")
+                )),
+                Ok(Err(err)) => this.error("Couldn’t Remove from the Kobo", err),
+                Err(_) => this.error(
+                    "Couldn’t Remove from the Kobo",
+                    "Removing stopped unexpectedly.",
+                ),
+            }
+        });
+    }
+}
+
 /// "2 already on the Kobo, 1 with no file" from the reasons books were skipped.
 fn summarize_skipped(skipped: &[hoard_core::store::send::Skipped]) -> String {
     let mut counts: Vec<(&str, usize)> = Vec::new();

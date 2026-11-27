@@ -129,6 +129,54 @@ pub(crate) fn write(conn: &mut Connection, updates: &[KoboDetails]) -> Result<us
     Ok(changed)
 }
 
+/// Removes sideloaded books (by `ContentID`) from an open Kobo database, in
+/// one transaction, as Calibre's Kobo driver does: the book's `content` row,
+/// its chapters' rows (`BookID`), its cached page covers
+/// (`volume_shortcovers`), tabs (`volume_tabs`) and shelf entries
+/// (`ShelfContent`). Highlights (`Bookmark`) and reading events are kept,
+/// so a book sent again gets its highlights back. Store books are never
+/// touched. Returns how many books were removed.
+pub(crate) fn remove(conn: &mut Connection, content_ids: &[String]) -> Result<usize> {
+    let has = |table: &str| -> Result<bool> {
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    };
+    let (covers, tabs, shelves) = (
+        has("volume_shortcovers")?,
+        has("volume_tabs")?,
+        has("ShelfContent")?,
+    );
+    let tx = conn.transaction()?;
+    let mut removed = 0;
+    for id in content_ids {
+        if !id.starts_with("file:///mnt/onboard/") {
+            continue;
+        }
+        tx.execute("DELETE FROM content WHERE BookID = ?1", [id])?;
+        removed += tx.execute(
+            "DELETE FROM content WHERE ContentID = ?1 AND ContentType = 6",
+            [id],
+        )?;
+        if covers {
+            tx.execute("DELETE FROM volume_shortcovers WHERE volumeId = ?1", [id])?;
+        }
+        if tabs {
+            tx.execute("DELETE FROM volume_tabs WHERE volumeid = ?1", [id])?;
+        }
+        if shelves {
+            tx.execute("DELETE FROM ShelfContent WHERE ContentId = ?1", [id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -143,11 +191,19 @@ pub(crate) mod tests {
              CREATE TABLE content (
                 ContentID TEXT, ContentType INTEGER, Title TEXT, Attribution TEXT,
                 Description TEXT, Publisher TEXT, Series TEXT, SeriesNumber TEXT,
-                SeriesNumberFloat REAL, SeriesID TEXT);
+                SeriesNumberFloat REAL, SeriesID TEXT, BookID TEXT);
+             CREATE TABLE volume_shortcovers (volumeId TEXT, shortcoverId TEXT);
+             INSERT INTO volume_shortcovers VALUES ('file:///mnt/onboard/Books/H/Hammer.kepub.epub', 'ch1');
+             CREATE TABLE ShelfContent (ShelfName TEXT, ContentId TEXT);
+             INSERT INTO ShelfContent VALUES ('Vikings', 'file:///mnt/onboard/Books/H/Hammer.kepub.epub');
+             CREATE TABLE Bookmark (BookmarkID TEXT, VolumeID TEXT);
+             INSERT INTO Bookmark VALUES ('b1', 'file:///mnt/onboard/Books/H/Hammer.kepub.epub');
              INSERT INTO content (ContentID, ContentType, Title, Attribution, SeriesNumberFloat)
              VALUES ('file:///mnt/onboard/Books/H/Hammer.kepub.epub', 6, 'The Hammer & the Cross', 'H. Harrison', 0),
-                    ('file:///mnt/onboard/Books/H/Hammer.kepub.epub!!ch1.xhtml', 9, 'ch1.xhtml', NULL, 0),
-                    ('store-book-uuid', 6, 'Store Book', 'Someone', 0);"
+                    ('store-book-uuid', 6, 'Store Book', 'Someone', 0);
+             INSERT INTO content (ContentID, ContentType, Title, BookID)
+             VALUES ('file:///mnt/onboard/Books/H/Hammer.kepub.epub!!ch1.xhtml', 9, 'ch1.xhtml',
+                     'file:///mnt/onboard/Books/H/Hammer.kepub.epub');"
         ))
         .unwrap();
     }
@@ -209,5 +265,28 @@ pub(crate) mod tests {
         // Now in step: nothing more to change.
         let have = read_details(&db).unwrap();
         assert!(want.changes_from(&have[id]).is_none());
+    }
+
+    #[test]
+    fn removes_a_sideloaded_book_and_its_records_but_keeps_highlights() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("KoboReader.sqlite");
+        fake_kobo_db(&db, 176);
+        let mut conn = Connection::open(&db).unwrap();
+        let id = "file:///mnt/onboard/Books/H/Hammer.kepub.epub".to_owned();
+        let removed = remove(&mut conn, &[id.clone(), "store-book-uuid".into()]).unwrap();
+        assert_eq!(removed, 1, "store books are never removed");
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(
+            count("SELECT count(*) FROM content WHERE ContentID LIKE 'file://%'"),
+            0
+        );
+        assert_eq!(count("SELECT count(*) FROM volume_shortcovers"), 0);
+        assert_eq!(count("SELECT count(*) FROM ShelfContent"), 0);
+        assert_eq!(count("SELECT count(*) FROM Bookmark"), 1, "highlights stay");
+        assert_eq!(
+            count("SELECT count(*) FROM content WHERE ContentID = 'store-book-uuid'"),
+            1
+        );
     }
 }

@@ -6,11 +6,13 @@
 //! books, or keeping sideloaded books' details in step) is being applied.
 //! Opening one backs up the Kobo's database first. It can copy a book file
 //! into the Kobo's storage (replacing a book file only when asked), clear the
-//! covers the Kobo saved for that book, and write sideloaded books' details
+//! covers the Kobo saved for that book, write sideloaded books' details
 //! (title, authors, series, description, publisher) into the database's
-//! `content` table on a verified database version; nothing else: no other
-//! database writes (the Kobo indexes new books itself when it's ejected), no
-//! other deletes, nothing else under `.kobo` or other hidden folders.
+//! `content` table, and remove sideloaded books the user chose (their files
+//! and their records, keeping highlights), on a verified database version;
+//! nothing else: no other database writes (the Kobo indexes new books itself
+//! when it's ejected), no other deletes, nothing else under `.kobo` or other
+//! hidden folders.
 
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -139,6 +141,49 @@ impl DeviceWriter {
         super::details::write(&mut conn, updates)
     }
 
+    /// Removes sideloaded books from the Kobo: first their records in its
+    /// database (see `details::remove`, one transaction, verified database
+    /// versions only), then their files, the covers it saved for them, and
+    /// folders left empty under the books folder. Only `.epub`, `.kepub.epub`
+    /// and `.pdf` files at safe relative paths. Returns how many books' files
+    /// were deleted.
+    pub fn remove_books(&self, books: &[PathBuf]) -> Result<usize> {
+        let mut checked = Vec::new();
+        for rel in books {
+            let rel = check_relative(rel)?;
+            if !is_book_file(rel) {
+                return Err(Error::BadKoboPath(rel.to_path_buf()));
+            }
+            checked.push(rel.to_path_buf());
+        }
+        let mut conn =
+            rusqlite::Connection::open(self.mount.join(super::device::DB_RELATIVE_PATH))?;
+        let version = super::details::db_version(&conn)?.unwrap_or(0);
+        if !super::model::is_tested_db_version(version) {
+            return Err(Error::UntestedKoboDb(version));
+        }
+        let ids: Vec<String> = checked.iter().map(|r| Self::volume_id(r)).collect();
+        super::details::remove(&mut conn, &ids)?;
+        drop(conn);
+        let mut deleted = 0;
+        for rel in &checked {
+            self.forget_cover(rel)?;
+            let path = self.mount.join(rel);
+            if path.is_file() {
+                std::fs::remove_file(&path)?;
+                deleted += 1;
+            }
+            // Empty author folders go too, but never the top folder.
+            let mut dir = rel.clone();
+            while dir.pop() && dir.components().count() > 1 {
+                if std::fs::remove_dir(self.mount.join(&dir)).is_err() {
+                    break;
+                }
+            }
+        }
+        Ok(deleted)
+    }
+
     /// Whether a file already exists at `relative` on the Kobo.
     pub fn exists(&self, relative: &Path) -> Result<bool> {
         Ok(self.mount.join(check_relative(relative)?).exists())
@@ -160,10 +205,7 @@ impl DeviceWriter {
     fn write_book(&self, src: &Path, relative: &Path, replace: bool) -> Result<PathBuf> {
         let relative = check_relative(relative)?;
         let dest = self.mount.join(relative);
-        let is_book = {
-            let name = relative.to_string_lossy().to_ascii_lowercase();
-            [".epub", ".pdf"].iter().any(|e| name.ends_with(e))
-        };
+        let is_book = is_book_file(relative);
         if dest.exists() && !(replace && is_book && dest.is_file()) {
             return Err(Error::AlreadyOnKobo(dest));
         }
@@ -207,6 +249,13 @@ fn check_relative(relative: &Path) -> Result<&Path> {
     } else {
         Err(Error::BadKoboPath(relative.to_path_buf()))
     }
+}
+
+/// A book file the writer may replace or remove: `.epub` (which covers
+/// `.kepub.epub`) or `.pdf`.
+fn is_book_file(relative: &Path) -> bool {
+    let name = relative.to_string_lossy().to_ascii_lowercase();
+    [".epub", ".pdf"].iter().any(|e| name.ends_with(e))
 }
 
 #[cfg(test)]

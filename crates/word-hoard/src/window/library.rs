@@ -41,6 +41,8 @@ pub(super) struct LibraryViews {
     pub bar: gtk::ActionBar,
     bar_label: gtk::Label,
     pub send: gtk::Button,
+    /// Remove from Kobo: shown when some chosen books are on the Kobo.
+    remove: gtk::Button,
     select_all: gtk::Button,
     done: gtk::Button,
 }
@@ -398,6 +400,15 @@ pub(super) fn build(lib: &Library) -> LibraryViews {
         .css_classes(["suggested-action"])
         .sensitive(false)
         .build();
+    let remove = gtk::Button::builder()
+        .child(
+            &adw::ButtonContent::builder()
+                .icon_name("user-trash-symbolic")
+                .label("Remove from Kobo")
+                .build(),
+        )
+        .visible(false)
+        .build();
     let select_all = gtk::Button::builder()
         .label("Select All")
         .tooltip_text("Select every book listed (Ctrl+A)")
@@ -406,6 +417,7 @@ pub(super) fn build(lib: &Library) -> LibraryViews {
     let bar = gtk::ActionBar::builder().revealed(false).build();
     bar.pack_start(&bar_label);
     bar.pack_end(&send);
+    bar.pack_end(&remove);
     bar.pack_end(&done);
     bar.pack_end(&select_all);
 
@@ -426,6 +438,7 @@ pub(super) fn build(lib: &Library) -> LibraryViews {
         bar,
         bar_label,
         send,
+        remove,
         select_all,
         done,
     }
@@ -590,6 +603,13 @@ impl Window {
             }
         });
         let weak = Rc::downgrade(self);
+        self.library.remove.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                let ids = this.library.selected_ids();
+                this.remove_books_from_kobo(ids);
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.library.send.connect_clicked(move |_| {
             if let Some(this) = weak.upgrade() {
                 let ids = this.library.selected_ids();
@@ -670,6 +690,15 @@ impl Window {
         self.library
             .send
             .set_sensitive(n > 0 && connected && !sending);
+        self.library.remove.set_visible(connected && on_kobo > 0);
+        self.library.remove.set_sensitive(!sending);
+        self.library.remove.set_tooltip_text(Some(&format!(
+            "Delete {} from your {}; {} stay{} in your library",
+            if on_kobo == 1 { "it" } else { "them" },
+            self.kobo_name(),
+            if on_kobo == 1 { "it" } else { "they" },
+            if on_kobo == 1 { "s" } else { "" },
+        )));
         self.library.send.set_tooltip_text(Some(&if sending {
             "Sending… wait for it to finish".to_owned()
         } else if !connected {
