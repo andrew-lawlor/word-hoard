@@ -30,6 +30,8 @@ pub struct KepubStats {
     pub documents: usize,
     /// koboSpans added.
     pub spans: usize,
+    /// Documents that weren't well-formed XHTML, tidied first.
+    pub tidied: usize,
 }
 
 const STYLE_HACK: &str = "div#book-inner { margin-top: 0; margin-bottom: 0; }";
@@ -138,6 +140,24 @@ pub fn kobo_copy(src: &Path, dest: &Path, how: &KoboCopy) -> Result<KepubStats> 
         }
         _ => None,
     };
+    // Documents that aren't well-formed XML (HTML5-style chapters) are
+    // tidied into XHTML before converting; found first, so the package
+    // document can say so.
+    let mut tidy: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if !how.already_kepub {
+        for i in 0..input.len() {
+            let mut entry = input.by_index(i).map_err(io_err)?;
+            let name = entry.name().to_owned();
+            if !is_content_document(&name) {
+                continue;
+            }
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry.read_to_end(&mut bytes)?;
+            if !super::tidy::is_well_formed(&String::from_utf8_lossy(&bytes)) {
+                tidy.insert(name);
+            }
+        }
+    }
     let mut stats = KepubStats::default();
     for i in 0..input.len() {
         let mut entry = input.by_index(i).map_err(io_err)?;
@@ -157,6 +177,9 @@ pub fn kobo_copy(src: &Path, dest: &Path, how: &KoboCopy) -> Result<KepubStats> 
             if let Some(fixed) = mark_cover_image(&opf) {
                 opf = fixed;
             }
+            if !tidy.is_empty() {
+                opf = mark_xhtml(&opf, opf_path.as_deref().unwrap_or(""), &tidy);
+            }
             if let Some(meta) = how.metadata
                 && let Some(with_details) = super::opf_meta::apply(&opf, meta)
             {
@@ -164,7 +187,11 @@ pub fn kobo_copy(src: &Path, dest: &Path, how: &KoboCopy) -> Result<KepubStats> 
             }
             bytes = opf.into_bytes();
         } else if !how.already_kepub && is_content_document(&name) {
-            let text = String::from_utf8_lossy(&bytes);
+            let mut text = String::from_utf8_lossy(&bytes).into_owned();
+            if tidy.contains(&name) {
+                text = super::tidy::to_xhtml(&text);
+                stats.tidied += 1;
+            }
             let (converted, spans) = convert_document(&text)?;
             bytes = converted.into_bytes();
             stats.documents += 1;
@@ -178,7 +205,9 @@ pub fn kobo_copy(src: &Path, dest: &Path, how: &KoboCopy) -> Result<KepubStats> 
 }
 
 /// The package document's path, from `META-INF/container.xml`.
-fn package_path<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> Option<String> {
+pub(crate) fn package_path<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> Option<String> {
     let mut container = String::new();
     zip.by_name("META-INF/container.xml")
         .ok()?
@@ -201,6 +230,48 @@ fn package_path<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> Option
 /// manifest item with `properties="cover-image"` (EPUB 3), and without one
 /// it may show another image from the book. `None` when there's nothing to
 /// change (the cover is already marked, or the book names none).
+/// `opf` with the manifest items for `tidied` documents (zip paths) marked
+/// `application/xhtml+xml`, as they are once tidied.
+fn mark_xhtml(opf: &str, opf_path: &str, tidied: &std::collections::HashSet<String>) -> String {
+    let mut out = String::with_capacity(opf.len());
+    let mut reader = Reader::from_str(opf);
+    let mut last = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = match reader.read_event() {
+            Ok(e) => e,
+            Err(_) => return opf.to_owned(),
+        };
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Eof => break,
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "item" => {
+                let href = e
+                    .attributes()
+                    .flatten()
+                    .find(|a| a.key.as_ref() == "href")
+                    .and_then(|a| {
+                        a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                            .ok()
+                            .map(|v| v.into_owned())
+                    });
+                let raw = &opf[before..after];
+                if let Some(href) = href
+                    && tidied.contains(&crate::kobo::epub::join_zip_path(opf_path, &href))
+                    && raw.contains("text/html")
+                {
+                    out.push_str(&opf[last..before]);
+                    out.push_str(&raw.replacen("\"text/html\"", "\"application/xhtml+xml\"", 1));
+                    last = after;
+                }
+            }
+            _ => {}
+        }
+    }
+    out.push_str(&opf[last..]);
+    out
+}
+
 pub(crate) fn mark_cover_image(opf: &str) -> Option<String> {
     // First pass: is a cover already marked, and which item does the meta name?
     let mut reader = Reader::from_str(opf);
@@ -814,7 +885,9 @@ mod tests {
             stats,
             KepubStats {
                 documents: 1,
-                spans: 8
+                spans: 8,
+                // &nbsp; and &unknown; aren't XML: tidied first.
+                tidied: 1
             }
         );
 

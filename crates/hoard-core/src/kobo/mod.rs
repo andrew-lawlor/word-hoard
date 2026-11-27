@@ -11,6 +11,7 @@ pub mod notebook;
 pub mod opf_meta;
 pub mod qvariant;
 pub mod reader;
+pub mod tidy;
 pub mod writer;
 
 pub use device::{

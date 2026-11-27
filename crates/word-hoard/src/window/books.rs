@@ -448,6 +448,27 @@ impl Window {
                         );
                     }
                     this.refresh_on_device();
+                    if !stats.unconverted.is_empty() {
+                        let n = stats.unconverted.len();
+                        this.error(
+                            &format!(
+                                "{} Sent Without Converting",
+                                plural(n, "Book", "Books")
+                            ),
+                            format!(
+                                "The copy made for the Kobo didn’t pass Word Hoard’s check, so {} went as {} came instead. The Kobo reads {} as a plain EPUB: without its page statistics, and it may look a little different.\n\n{}",
+                                if n == 1 { "this book" } else { "these books" },
+                                if n == 1 { "it" } else { "they" },
+                                if n == 1 { "it" } else { "them" },
+                                stats
+                                    .unconverted
+                                    .iter()
+                                    .map(|(title, why)| format!("{title}: {why}"))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            ),
+                        );
+                    }
                     if stats.sent > 0 {
                         this.toast(&format!(
                             "Sent {}. Eject your {name} to add them.",
@@ -532,9 +553,9 @@ impl Window {
                 n => format!("Remove {n} Books from Your {name}?"),
             };
             let mut body = if books.len() == 1 {
-                "Its file is deleted from the Kobo, along with the Kobo’s records of it, so it doesn’t come back. It stays in your library, and so do your highlights: send it again and the Kobo shows them again.".to_owned()
+                "Its file is deleted from the Kobo, along with the Kobo’s records of it, so it doesn’t come back. The Kobo forgets where you were in it. It stays in your library, and so do your highlights.".to_owned()
             } else {
-                "Their files are deleted from the Kobo, along with the Kobo’s records of them, so they don’t come back. They stay in your library, and so do your highlights: send a book again and the Kobo shows its highlights again.".to_owned()
+                "Their files are deleted from the Kobo, along with the Kobo’s records of them, so they don’t come back. The Kobo forgets where you were in them. They stay in your library, and so do your highlights.".to_owned()
             };
             if !plan.skipped.is_empty() {
                 body.push_str(&format!(

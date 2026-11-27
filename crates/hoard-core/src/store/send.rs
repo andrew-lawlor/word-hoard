@@ -70,6 +70,9 @@ pub struct SendStats {
     pub converted: usize,
     /// (title, why) for books that couldn't be sent.
     pub failed: Vec<(String, String)>,
+    /// (title, why) for books sent as their original EPUB, because the copy
+    /// converted for the Kobo failed its check.
+    pub unconverted: Vec<(String, String)>,
     /// Where the Kobo's database was backed up before anything was written.
     pub backup: PathBuf,
 }
@@ -284,6 +287,7 @@ impl Library {
             backup: writer.backup().to_path_buf(),
             ..Default::default()
         };
+        let mut unconverted = Vec::new();
         let device_id = self.upsert_device(writer.device())?;
         for (n, item) in plan.items.iter().enumerate() {
             let sent = (|| -> Result<()> {
@@ -293,6 +297,7 @@ impl Library {
                     .source
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+                let mut dest = item.dest.clone();
                 let file = if is_pdf {
                     item.source.clone()
                 } else {
@@ -308,20 +313,44 @@ impl Library {
                             already_kepub: item.action == SendAction::Copy,
                         },
                     )?;
-                    kepub
+                    // Never send a copy the Kobo might choke on.
+                    match crate::kobo::tidy::check_copy(&kepub) {
+                        Ok(()) => kepub,
+                        Err(why) if item.action == SendAction::Convert && !item.replace => {
+                            // The book as it came, which the Kobo reads as a
+                            // plain EPUB.
+                            let name = dest
+                                .file_name()
+                                .map(|n| n.to_string_lossy().replace(".kepub.epub", ".epub"))
+                                .unwrap_or_default();
+                            dest.set_file_name(name);
+                            if writer.exists(&dest)? {
+                                return Err(Error::Library(format!(
+                                    "the copy made for the Kobo failed a check ({why}), and a file is already where the original would go"
+                                )));
+                            }
+                            unconverted.push((item.title.clone(), why));
+                            item.source.clone()
+                        }
+                        Err(why) => {
+                            return Err(Error::Library(format!(
+                                "the copy made for the Kobo failed a check ({why}), so the one there was left as it is"
+                            )));
+                        }
+                    }
                 };
                 // A cover the Kobo saved for an earlier copy at this path
                 // would be shown instead of the new one.
-                writer.forget_cover(&item.dest)?;
+                writer.forget_cover(&dest)?;
                 if item.replace {
-                    writer.replace_book(&file, &item.dest)?;
+                    writer.replace_book(&file, &dest)?;
                 } else {
-                    writer.copy_book(&file, &item.dest)?;
+                    writer.copy_book(&file, &dest)?;
                 }
                 self.conn.execute(
                     "INSERT INTO book_source (device_id, volume_id, book_id) VALUES (?1, ?2, ?3)
                      ON CONFLICT (device_id, volume_id) DO UPDATE SET book_id = excluded.book_id",
-                    params![device_id, DeviceWriter::volume_id(&item.dest), item.book_id],
+                    params![device_id, DeviceWriter::volume_id(&dest), item.book_id],
                 )?;
                 Ok(())
             })();
@@ -336,6 +365,7 @@ impl Library {
             }
             progress(n + 1, plan.items.len());
         }
+        stats.unconverted = unconverted;
         Ok(stats)
     }
 
@@ -644,6 +674,38 @@ mod tests {
             "not on this Kobo"
         );
         assert_eq!(lib.plan_send(&kobo, &[dune]).unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn sends_the_original_when_the_converted_copy_fails_its_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fake_kobo(&kobo);
+        let lib = Library::open(&dir.path().join("data/library.db")).unwrap();
+        lib.set_books_root(&dir.path().join("Books")).unwrap();
+        // A package document with a prefix it never declares: conversion
+        // keeps it, so the check fails.
+        let src = dir.path().join("odd.epub");
+        write_epub(
+            &src,
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Odd Book</dc:title><dc:creator>Some One</dc:creator><dc:identifier id="id">urn:uuid:odd</dc:identifier><mystery:thing/></metadata></package>"#,
+        );
+        let book = lib.add_file(&src, AddMode::Copy).unwrap().book_id;
+        let plan = lib.plan_send(&kobo, &[book]).unwrap();
+        assert_eq!(plan.items[0].action, SendAction::Convert);
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        let stats = lib.apply_send(&writer, &plan, |_, _| {}).unwrap();
+        assert_eq!(stats.sent, 1);
+        assert_eq!(stats.unconverted.len(), 1, "{stats:?}");
+        assert!(stats.unconverted[0].1.contains("package document"));
+        let sent = kobo.join("Books/Some One/Odd Book.epub");
+        assert!(sent.is_file() && !kobo.join("Books/Some One/Odd Book.kepub.epub").exists());
+        assert_eq!(
+            std::fs::read(&sent).unwrap(),
+            std::fs::read(&lib.book_files(book).unwrap()[0].path).unwrap(),
+            "the library's file, as it is"
+        );
+        assert_eq!(lib.books_on_device(&kobo).unwrap(), [book].into());
     }
 
     #[test]

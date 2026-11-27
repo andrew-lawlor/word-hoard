@@ -21,3 +21,5 @@ sha1_smol = "1.0.1"
 bzip2-rs = "0.1.2"
 resvg = { version = "0.48", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+html5ever = "0.40.1"
+markup5ever_rcdom = "0.40.1"
