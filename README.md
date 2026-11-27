@@ -253,3 +253,7 @@ Definitions come from **[Wiktionary](https://www.wiktionary.org/)** © Wiktionar
 The books in the screenshots are **[Standard Ebooks](https://standardebooks.org)** editions, dedicated to the public domain ([CC0](https://creativecommons.org/publicdomain/zero/1.0/)). Thanks to its volunteers.
 
 Word Hoard isn't affiliated with or endorsed by Rakuten Kobo or the KOReader project. "Kobo" is a trademark of Rakuten Kobo Inc.
+
+## Developing
+
+`scripts/dev.sh` builds the app and CLI incrementally (seconds after a small change) and installs a **Word Hoard (Dev)** launcher. The dev build has its own app ID (`io.github.andrew_lawlor.WordHoard.Devel`), so it runs beside the Flatpak, and it opens the Flatpak's library. `scripts/dev.sh run` builds and starts it from the terminal. `scripts/build-flatpak.sh` builds and installs the Flatpak itself (slow: it compiles everything from scratch); use it for changes that depend on the sandbox.
