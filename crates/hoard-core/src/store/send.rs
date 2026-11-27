@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde::Serialize;
 
 use super::Library;
@@ -90,16 +90,24 @@ impl Library {
                 title: book.title.clone(),
                 reason: reason.to_owned(),
             };
-            let on_device: bool = self
+            // On the device if a copy recorded for it is still there: a
+            // store book, or a sideloaded file that exists. A record whose
+            // file is gone (deleted, or the Kobo not yet ejected since) doesn't
+            // count.
+            let volumes: Vec<String> = self
                 .conn
-                .query_row(
-                    "SELECT 1 FROM book_source s JOIN device d ON d.id = s.device_id
+                .prepare(
+                    "SELECT s.volume_id FROM book_source s JOIN device d ON d.id = s.device_id
                      WHERE d.serial = ?1 AND s.book_id = ?2",
-                    params![device.serial, id],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
+                )?
+                .query_map(params![device.serial, id], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let on_device = volumes
+                .iter()
+                .any(|v| match v.strip_prefix("file:///mnt/onboard/") {
+                    Some(rel) => mount.join(rel).is_file(),
+                    None => true,
+                });
             if on_device {
                 plan.skipped.push(skip("already on this Kobo"));
                 continue;
@@ -316,6 +324,11 @@ mod tests {
             volume,
             "file:///mnt/onboard/Books/Frank Herbert/Dune.kepub.epub"
         );
+
+        // Deleted from the Kobo (but still recorded): it can be sent again.
+        std::fs::remove_file(&sent).unwrap();
+        let after_delete = lib.plan_send(&kobo, &[dune]).unwrap();
+        assert_eq!(after_delete.items.len(), 1, "{:?}", after_delete.skipped);
     }
 
     #[test]
