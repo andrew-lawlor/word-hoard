@@ -514,6 +514,14 @@ impl Window {
 
     pub fn present(self: &Rc<Self>) {
         self.win.present();
+        // Development only: `WORD_HOARD_EJECT=1` ejects the connected Kobo
+        // once start-up settles (for checking eject without clicking).
+        if cfg!(debug_assertions) && std::env::var_os("WORD_HOARD_EJECT").is_some() {
+            let this = self.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
+                this.eject()
+            });
+        }
         // Development only: `WORD_HOARD_OPEN=book:<id>` opens on a book's page
         // (for screenshots and checking layouts without clicking through).
         if cfg!(debug_assertions)

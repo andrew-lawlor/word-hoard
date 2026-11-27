@@ -314,26 +314,27 @@ impl Window {
         }
     }
 
-    fn eject(self: &Rc<Self>) {
+    pub(super) fn eject(self: &Rc<Self>) {
         if self.importing.get() {
             return;
         }
-        let Some(mount) = self.kobo.borrow().as_ref().map(|k| k.mount.clone()) else {
+        let Some((mount, root)) = self
+            .kobo
+            .borrow()
+            .as_ref()
+            .map(|k| (k.mount.clone(), k.root.clone()))
+        else {
             return;
         };
         let name = self.kobo_name();
         self.set_banner(&format!("Ejecting your {name}…"), None);
         let this = self.clone();
         glib::spawn_future_local(async move {
-            let operation = gtk::MountOperation::new(Some(&this.win));
-            let result = if mount.can_eject() {
-                mount
-                    .eject_with_operation_future(gio::MountUnmountFlags::NONE, Some(&operation))
-                    .await
-            } else {
-                mount
-                    .unmount_with_operation_future(gio::MountUnmountFlags::NONE, Some(&operation))
-                    .await
+            // UDisks2 first: GIO without gvfs runs `umount`, which a Flatpak
+            // doesn't have.
+            let result = match udisks_eject(&root).await {
+                Ok(true) => Ok(()),
+                Ok(false) | Err(_) => this.gio_eject(&mount).await,
             };
             match result {
                 Ok(()) => {
@@ -348,6 +349,21 @@ impl Window {
                 }
             }
         });
+    }
+
+    async fn gio_eject(&self, mount: &gio::Mount) -> Result<(), glib::Error> {
+        {
+            let operation = gtk::MountOperation::new(Some(&self.win));
+            if mount.can_eject() {
+                mount
+                    .eject_with_operation_future(gio::MountUnmountFlags::NONE, Some(&operation))
+                    .await
+            } else {
+                mount
+                    .unmount_with_operation_future(gio::MountUnmountFlags::NONE, Some(&operation))
+                    .await
+            }
+        }
     }
 
     fn import_toast(self: &Rc<Self>, s: &ImportStats) {
@@ -423,11 +439,22 @@ fn import_summary(s: &ImportStats) -> (String, Option<(&'static str, View)>) {
     (title, target)
 }
 
-/// Asks UDisks2 to mount every filesystem labelled KOBOeReader that isn't
-/// mounted yet (as the desktop would, read-write under /run/media).
-async fn mount_udisks_kobos(bus: &gio::DBusConnection) {
-    const UDISKS: &str = "org.freedesktop.UDisks2";
-    let Ok(reply) = bus
+const UDISKS: &str = "org.freedesktop.UDisks2";
+
+/// A filesystem UDisks2 knows about.
+struct UdisksFilesystem {
+    path: String,
+    label: Option<String>,
+    mount_points: Vec<PathBuf>,
+    /// The drive it's on (`/` when none).
+    drive: Option<String>,
+}
+
+/// Every filesystem UDisks2 manages, with its label, mount points and drive.
+async fn udisks_filesystems(
+    bus: &gio::DBusConnection,
+) -> Result<Vec<UdisksFilesystem>, glib::Error> {
+    let reply = bus
         .call_future(
             Some(UDISKS),
             "/org/freedesktop/UDisks2",
@@ -438,11 +465,9 @@ async fn mount_udisks_kobos(bus: &gio::DBusConnection) {
             gio::DBusCallFlags::NONE,
             5000,
         )
-        .await
-    else {
-        return;
-    };
+        .await?;
     let objects = reply.child_value(0);
+    let mut out = Vec::new();
     for i in 0..objects.n_children() {
         let entry = objects.child_value(i);
         let Some(path) = entry.child_value(0).str().map(str::to_owned) else {
@@ -456,35 +481,112 @@ async fn mount_udisks_kobos(bus: &gio::DBusConnection) {
                 .find(|i| i.child_value(0).str() == Some(name))
                 .map(|i| glib::VariantDict::new(Some(&i.child_value(1))))
         };
-        let label = properties("org.freedesktop.UDisks2.Block")
-            .and_then(|block| block.lookup_value("IdLabel", None))
-            .and_then(|l| l.str().map(str::to_owned));
         let Some(filesystem) = properties("org.freedesktop.UDisks2.Filesystem") else {
             continue;
         };
-        let mounted = filesystem
+        let block = properties("org.freedesktop.UDisks2.Block");
+        // MountPoints is aay: NUL-terminated byte strings.
+        let mount_points = filesystem
             .lookup_value("MountPoints", None)
-            .is_some_and(|m| m.n_children() > 0);
-        if mounted || !label.is_some_and(|l| l.eq_ignore_ascii_case("KOBOeReader")) {
+            .map(|points| {
+                (0..points.n_children())
+                    .map(|k| {
+                        let bytes = points.child_value(k).data().to_vec();
+                        let bytes = bytes.strip_suffix(&[0]).unwrap_or(&bytes).to_vec();
+                        PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(UdisksFilesystem {
+            path,
+            label: block
+                .as_ref()
+                .and_then(|b| b.lookup_value("IdLabel", None))
+                .and_then(|l| l.str().map(str::to_owned)),
+            mount_points,
+            drive: block
+                .as_ref()
+                .and_then(|b| b.lookup_value("Drive", None))
+                .and_then(|d| d.str().map(str::to_owned)),
+        });
+    }
+    Ok(out)
+}
+
+/// Calls a UDisks2 method that takes only an options dictionary.
+async fn udisks_call(
+    bus: &gio::DBusConnection,
+    path: &str,
+    interface: &str,
+    method: &str,
+) -> Result<(), glib::Error> {
+    let options = glib::VariantDict::new(None).end();
+    bus.call_future(
+        Some(UDISKS),
+        path,
+        interface,
+        method,
+        Some(&glib::Variant::tuple_from_iter([options])),
+        None,
+        gio::DBusCallFlags::NONE,
+        30000,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Asks UDisks2 to mount every filesystem labelled KOBOeReader that isn't
+/// mounted yet (as the desktop would, read-write under /run/media).
+async fn mount_udisks_kobos(bus: &gio::DBusConnection) {
+    let Ok(filesystems) = udisks_filesystems(bus).await else {
+        return;
+    };
+    for fs in filesystems {
+        let kobo = fs
+            .label
+            .as_deref()
+            .is_some_and(|l| l.eq_ignore_ascii_case("KOBOeReader"));
+        if !kobo || !fs.mount_points.is_empty() {
             continue;
         }
-        let options = glib::VariantDict::new(None).end();
-        if let Err(err) = bus
-            .call_future(
-                Some(UDISKS),
-                &path,
-                "org.freedesktop.UDisks2.Filesystem",
-                "Mount",
-                Some(&glib::Variant::tuple_from_iter([options])),
-                Some(glib::VariantTy::new("(s)").expect("valid type")),
-                gio::DBusCallFlags::NONE,
-                30000,
-            )
-            .await
+        if let Err(err) =
+            udisks_call(bus, &fs.path, "org.freedesktop.UDisks2.Filesystem", "Mount").await
         {
             eprintln!("word-hoard: couldn’t mount the Kobo through UDisks2: {err}");
         }
     }
+}
+
+/// Ejects the drive mounted at `root` through UDisks2: unmounts it, then
+/// powers it off so the Kobo knows it's free. `Ok(false)` when UDisks2
+/// doesn't know the mount (then GIO is tried instead).
+async fn udisks_eject(root: &std::path::Path) -> Result<bool, glib::Error> {
+    let bus = gio::bus_get_future(gio::BusType::System).await?;
+    let target = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let Some(fs) = udisks_filesystems(&bus)
+        .await?
+        .into_iter()
+        .find(|fs| fs.mount_points.iter().any(|m| *m == target || m == root))
+    else {
+        return Ok(false);
+    };
+    udisks_call(
+        &bus,
+        &fs.path,
+        "org.freedesktop.UDisks2.Filesystem",
+        "Unmount",
+    )
+    .await?;
+    if let Some(drive) = fs.drive.filter(|d| d != "/") {
+        // Not every drive can be powered off; it's unmounted either way.
+        if let Err(err) =
+            udisks_call(&bus, &drive, "org.freedesktop.UDisks2.Drive", "PowerOff").await
+        {
+            eprintln!("word-hoard: couldn’t power off the Kobo: {err}");
+        }
+    }
+    Ok(true)
 }
 
 #[cfg(test)]
