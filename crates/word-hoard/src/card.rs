@@ -297,9 +297,8 @@ pub fn book_header(book: &Book, details: &BookDetails) -> gtk::ListBoxRow {
         .valign(gtk::Align::Start)
         .css_classes(["book-cover"])
         .build();
-    match book.cover.as_ref().filter(|p| p.is_file()) {
-        Some(path) => cover.set_filename(Some(path)),
-        None => cover.add_css_class("no-cover"),
+    if !crate::covers::show(&cover, book.cover.as_deref()) {
+        cover.add_css_class("no-cover");
     }
     cover.update_property(&[gtk::accessible::Property::Label("Cover")]);
     // A picture asks for its image's full size; clamp it to the cover width.
@@ -502,15 +501,14 @@ pub fn book_tile(book: &Book) -> gtk::Widget {
         .width_request(W)
         .halign(gtk::Align::Center)
         .build();
-    match book.cover.as_ref().filter(|p| p.is_file()) {
-        Some(path) => {
-            let cover = gtk::Picture::builder()
-                .content_fit(gtk::ContentFit::Cover)
-                .can_shrink(true)
-                .height_request(W * 3 / 2)
-                .css_classes(["book-cover"])
-                .build();
-            cover.set_filename(Some(path));
+    let cover = gtk::Picture::builder()
+        .content_fit(gtk::ContentFit::Cover)
+        .can_shrink(true)
+        .height_request(W * 3 / 2)
+        .css_classes(["book-cover"])
+        .build();
+    match crate::covers::show(&cover, book.cover.as_deref()) {
+        true => {
             // A picture asks for its image's full size; clamp it to the tile.
             tile.append(
                 &adw::Clamp::builder()
@@ -520,7 +518,7 @@ pub fn book_tile(book: &Book) -> gtk::Widget {
                     .build(),
             );
         }
-        None => {
+        false => {
             let placeholder = gtk::Box::builder()
                 .width_request(W)
                 .height_request(W * 3 / 2)

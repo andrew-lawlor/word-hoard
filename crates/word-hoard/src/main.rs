@@ -1,6 +1,7 @@
 //! Word Hoard: curate Kobo highlights, notes and vocabulary.
 
 mod card;
+mod covers;
 mod edit;
 mod portal;
 mod share;
@@ -31,6 +32,11 @@ fn main() -> glib::ExitCode {
         }
     }
     let app = adw::Application::builder().application_id(APP_ID).build();
+    // Development only: `WORD_HOARD_SEPARATE=1` runs a second instance
+    // beside an open window instead of handing over to it.
+    if cfg!(debug_assertions) && std::env::var_os("WORD_HOARD_SEPARATE").is_some() {
+        app.set_flags(app.flags() | gio::ApplicationFlags::NON_UNIQUE);
+    }
     app.connect_startup(|_| load_css());
     app.connect_activate(activate);
     app.set_accels_for_action("win.search", &["<Control>f"]);
