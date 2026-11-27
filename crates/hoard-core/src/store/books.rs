@@ -54,6 +54,8 @@ pub struct BookDetails {
     pub published: Option<String>,
     pub language: Option<String>,
     pub files: Vec<BookFile>,
+    /// How far it's been read in each place, latest first.
+    pub progress: Vec<super::readers::SourceProgress>,
 }
 
 impl BookDetails {
@@ -410,6 +412,7 @@ impl Library {
             published,
             language,
             files: self.book_files(book_id)?,
+            progress: self.reading_progress(book_id)?,
         })
     }
 

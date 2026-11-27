@@ -68,6 +68,42 @@ impl Window {
         group.add(&delete_policy);
 
         page.add(&group);
+
+        // Foliate, when it's installed.
+        let installs = super::foliate::foliate_dirs();
+        let group = adw::PreferencesGroup::builder()
+            .title("Foliate")
+            .description("Highlights and notes you make in Foliate come into Word Hoard as you make them, with how far you’ve read. Word Hoard only reads Foliate’s files.")
+            .build();
+        let foliate = adw::SwitchRow::builder()
+            .title("Import from Foliate")
+            .subtitle(if installs.is_empty() {
+                "Foliate isn’t installed, or hasn’t opened a book yet".to_owned()
+            } else {
+                format!(
+                    "Found: {}",
+                    installs
+                        .iter()
+                        .map(|(_, kind)| match *kind {
+                            "flatpak" => "Flatpak",
+                            "snap" => "Snap",
+                            _ => "system install",
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .active(!self.flag(super::foliate::FOLIATE_OFF))
+            .build();
+        let weak = Rc::downgrade(self);
+        foliate.connect_active_notify(move |row| {
+            if let Some(this) = weak.upgrade() {
+                this.set_flag(super::foliate::FOLIATE_OFF, !row.is_active());
+                this.start_foliate();
+            }
+        });
+        group.add(&foliate);
+        page.add(&group);
         page.add(&self.handwriting_group(&dialog));
 
         // Quote cards' Email… is addressed here, usually to the user.

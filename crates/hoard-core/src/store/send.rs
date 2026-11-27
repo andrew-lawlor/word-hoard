@@ -466,7 +466,7 @@ impl Library {
         Ok(on)
     }
 
-    fn upsert_device(&self, d: &DeviceInfo) -> Result<i64> {
+    pub(crate) fn upsert_device(&self, d: &DeviceInfo) -> Result<i64> {
         Ok(self.conn.query_row(
             "INSERT INTO device (serial, model_id, firmware, first_seen_at, last_seen_at)
              VALUES (?1, ?2, ?3, ?4, ?4)

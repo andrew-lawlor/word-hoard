@@ -217,7 +217,7 @@ pub fn build(a: &Annotation, in_book_view: bool, name_reader: bool) -> gtk::Widg
         meta.push(format_date(date));
     }
     if name_reader {
-        meta.push(if a.from_koreader { "KOReader" } else { "Kobo" }.to_owned());
+        meta.push(a.reader.clone().unwrap_or_else(|| "Kobo".to_owned()));
     }
     let meta_label = gtk::Label::builder()
         .label(meta.join(" · "))
@@ -343,12 +343,27 @@ pub fn book_header(book: &Book, details: &BookDetails) -> gtk::ListBoxRow {
         label.set_margin_top(6);
         text.append(&label);
     }
+    // Where it's being read: "8% in Foliate, today · 62% on Kobo Libra
+    // Colour, yesterday". Without per-place progress, the book's own.
     let mut reading = Vec::new();
-    if let Some(p) = book.percent_read.filter(|p| *p > 0) {
-        reading.push(format!("{p}% read"));
+    for p in details.progress.iter().filter(|p| p.percent_read > 0) {
+        let place = if p.source == "Foliate" {
+            format!("in {}", p.source)
+        } else {
+            format!("on {}", p.source)
+        };
+        reading.push(match p.last_read {
+            Some(date) => format!("{}% {place}, {}", p.percent_read, format_date(date)),
+            None => format!("{}% {place}", p.percent_read),
+        });
     }
-    if let Some(date) = book.last_read_at {
-        reading.push(format!("last read {}", format_date(date)));
+    if reading.is_empty() {
+        if let Some(p) = book.percent_read.filter(|p| *p > 0) {
+            reading.push(format!("{p}% read"));
+        }
+        if let Some(date) = book.last_read_at {
+            reading.push(format!("last read {}", format_date(date)));
+        }
     }
     if !reading.is_empty() {
         text.append(&wrapped_label(

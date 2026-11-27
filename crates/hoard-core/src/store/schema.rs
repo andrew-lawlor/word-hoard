@@ -397,4 +397,10 @@ pub const MIGRATIONS: &[&str] = &[
         DELETE FROM annotation_fts WHERE rowid = old.id;
     END;
     "#,
+    // 14: reading progress per source (each Kobo, Foliate…), so a book can
+    // show how far it's been read where; the book keeps the latest.
+    r#"
+    ALTER TABLE book_source ADD COLUMN percent_read INTEGER;
+    ALTER TABLE book_source ADD COLUMN last_read_at TEXT;
+    "#,
 ];

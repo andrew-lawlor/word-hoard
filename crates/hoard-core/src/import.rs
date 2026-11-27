@@ -267,6 +267,23 @@ impl Importer<'_> {
                 b.last_read
             ],
         )?;
+        // Progress where it was read, and the book's own: the most recently
+        // read source's, when sources say when.
+        self.tx.execute(
+            "UPDATE book_source SET percent_read = coalesce(?3, percent_read),
+                    last_read_at = coalesce(?4, last_read_at)
+             WHERE device_id = ?1 AND volume_id = ?2",
+            params![self.device_id, b.volume_id, b.percent_read, b.last_read],
+        )?;
+        self.tx.execute(
+            "UPDATE book SET (percent_read, last_read_at) = (
+                 SELECT percent_read, last_read_at FROM book_source
+                 WHERE book_id = ?1 AND last_read_at IS NOT NULL AND percent_read IS NOT NULL
+                 ORDER BY last_read_at DESC LIMIT 1)
+             WHERE id = ?1 AND EXISTS (SELECT 1 FROM book_source WHERE book_id = ?1
+                 AND last_read_at IS NOT NULL AND percent_read IS NOT NULL)",
+            [id],
+        )?;
         Ok(BookRef { id, fingerprint })
     }
 

@@ -27,6 +27,7 @@ mod books;
 mod content;
 mod device;
 mod exports;
+mod foliate;
 mod library;
 mod library_folder;
 
@@ -189,6 +190,10 @@ pub struct Window {
     monitor: gio::VolumeMonitor,
     kobo: RefCell<Option<Connected>>,
     importing: Cell<bool>,
+    /// Watches on Foliate's data folders (dropped to stop watching).
+    foliate_monitors: RefCell<Vec<gio::FileMonitor>>,
+    /// A Foliate import waiting for its saves to settle.
+    foliate_pending: RefCell<Option<glib::SourceId>>,
     /// Books are being added (from files, a folder or Calibre).
     adding_books: Cell<bool>,
     /// Books are being sent to the Kobo (one send at a time; no eject).
@@ -479,6 +484,8 @@ impl Window {
             monitor: gio::VolumeMonitor::get(),
             kobo: RefCell::default(),
             importing: Cell::new(false),
+            foliate_monitors: RefCell::default(),
+            foliate_pending: RefCell::default(),
             adding_books: Cell::new(false),
             sending: Cell::new(false),
             transcribing: Cell::new(false),
@@ -525,6 +532,7 @@ impl Window {
 
     pub fn present(self: &Rc<Self>) {
         self.win.present();
+        self.start_foliate();
         // Development only: `WORD_HOARD_EJECT=1` ejects the connected Kobo
         // once start-up settles (for checking eject without clicking).
         if cfg!(debug_assertions) && std::env::var_os("WORD_HOARD_EJECT").is_some() {
