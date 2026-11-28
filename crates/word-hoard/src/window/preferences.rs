@@ -103,6 +103,24 @@ impl Window {
             }
         });
         group.add(&foliate);
+        let sync = adw::SwitchRow::builder()
+            .title("Sync Reading Position With the Kobo")
+            .subtitle("For books in both, the place you read to most recently goes to the other while the Kobo is connected")
+            .active(self.flag(super::foliate::POSITION_SYNC_ON))
+            .sensitive(!self.flag(super::foliate::FOLIATE_OFF))
+            .build();
+        let weak = Rc::downgrade(self);
+        sync.connect_active_notify(move |row| {
+            if let Some(this) = weak.upgrade() {
+                this.set_flag(super::foliate::POSITION_SYNC_ON, row.is_active());
+                this.sync_positions();
+            }
+        });
+        foliate
+            .bind_property("active", &sync, "sensitive")
+            .sync_create()
+            .build();
+        group.add(&sync);
         page.add(&group);
         page.add(&self.handwriting_group(&dialog));
 

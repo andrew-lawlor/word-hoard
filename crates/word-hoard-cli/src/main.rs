@@ -65,6 +65,19 @@ enum Command {
         #[arg(long)]
         other: Option<PathBuf>,
     },
+    /// Bring the reading position into step between a Kobo and Foliate: for
+    /// books in both, the place read to most recently goes to the other.
+    /// Shows what would change; nothing is written without --yes.
+    SyncPositions {
+        /// Kobo mount point (e.g. /run/media/$USER/KOBOeReader).
+        mount: PathBuf,
+        /// Foliate's data folder (found if not given).
+        #[arg(long)]
+        foliate: Option<PathBuf>,
+        /// Write the positions (after backing up the Kobo's database).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Send books to a Kobo (EPUBs converted to KEPUB). Shows what would be
     /// written; nothing is written without --yes.
     Send {
@@ -215,6 +228,11 @@ fn main() -> Result<()> {
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
         Command::Position { book, at, other } => position(&book, &at, other.as_deref()),
+        Command::SyncPositions {
+            mount,
+            foliate,
+            yes,
+        } => sync_positions(&mount, foliate, yes, &library_path),
         Command::Send {
             mount,
             search,
@@ -346,6 +364,55 @@ fn warn_if_untested(snapshot: &KoboSnapshot) {
 }
 
 const ISSUES_URL: &str = "https://github.com/andrew-lawlor/word-hoard/issues";
+
+fn sync_positions(
+    mount: &Path,
+    foliate: Option<PathBuf>,
+    yes: bool,
+    library_path: &Path,
+) -> Result<()> {
+    use hoard_core::store::positions::Reader;
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let dirs: Vec<PathBuf> = match foliate {
+        Some(dir) => vec![dir],
+        None => hoard_core::foliate::data_dirs(&home)
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect(),
+    };
+    if dirs.is_empty() {
+        println!("Foliate isn't installed here.");
+        return Ok(());
+    }
+    let lib = Library::open(library_path)?;
+    let backups = hoard_core::local_dir().join("backups/kobo");
+    for dir in dirs {
+        let s = lib.sync_positions(mount, &backups, &dir, !yes)?;
+        for m in &s.moves {
+            let to = match m.to {
+                Reader::Kobo => "Kobo",
+                Reader::Foliate => "Foliate",
+            };
+            println!(
+                "{}: {to} → {:.0}% \"{}…\"",
+                m.title,
+                m.fraction * 100.0,
+                m.text
+            );
+        }
+        for title in &s.different_text {
+            println!("{title}: the Kobo's copy and the library's differ; not synced");
+        }
+        if s.moves.is_empty() {
+            println!("Everything is in step.");
+        } else if !yes {
+            println!("Nothing was written. Run again with --yes to sync.");
+        } else if let Some(backup) = &s.backup {
+            println!("Kobo database backed up to {}", backup.display());
+        }
+    }
+    Ok(())
+}
 
 fn position(book: &Path, at: &str, other: Option<&Path>) -> Result<()> {
     use hoard_core::position::BookText;

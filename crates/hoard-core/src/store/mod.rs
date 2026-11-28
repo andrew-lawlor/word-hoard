@@ -5,6 +5,7 @@ pub mod books;
 pub mod location;
 mod markup;
 mod pen;
+pub mod positions;
 mod query;
 pub mod readers;
 mod schema;

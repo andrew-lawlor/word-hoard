@@ -46,6 +46,8 @@ pub fn data_dirs(home: &Path) -> Vec<(PathBuf, &'static str)> {
 /// A book as Foliate knows it.
 #[derive(Debug, Clone)]
 pub struct FoliateBook {
+    /// Foliate's file for the book.
+    pub path: PathBuf,
     /// The EPUB's unique identifier (Foliate's key for the book).
     pub identifier: String,
     pub title: Option<String>,
@@ -156,6 +158,7 @@ fn read_book(path: &Path) -> Option<FoliateBook> {
         })
         .unwrap_or_default();
     Some(FoliateBook {
+        path: path.to_path_buf(),
         title: meta.get("title").and_then(text),
         author: meta.get("author").and_then(text),
         identifier,
@@ -201,6 +204,39 @@ fn annotation(a: &Value, volume_id: &str, identifier: &str) -> Option<KoboBookma
         modified: time(a.get("modified")).or(created),
         extra_data: None,
     })
+}
+
+/// Sets where Foliate opens a book: its `lastLocation` (a CFI) and its
+/// progress (`[current, total]`, kept in Foliate's own units) to
+/// `fraction` of the way. Everything else in the file stays as it is; the
+/// file is replaced whole, so Foliate never reads half of it.
+pub fn set_position(file: &Path, cfi: &str, fraction: f64) -> crate::Result<()> {
+    let mut json: Value = serde_json::from_str(&std::fs::read_to_string(file)?)
+        .map_err(|e| crate::kobo::epub::io_err(format!("Foliate file: {e}")))?;
+    let obj = json
+        .as_object_mut()
+        .ok_or_else(|| crate::kobo::epub::io_err("Foliate file isn't an object"))?;
+    obj.insert("lastLocation".into(), Value::String(cfi.to_owned()));
+    if let Some(total) = obj
+        .get("progress")
+        .and_then(Value::as_array)
+        .and_then(|p| p.get(1))
+        .and_then(Value::as_f64)
+        .filter(|t| *t > 0.0)
+    {
+        let current = (fraction.clamp(0.0, 1.0) * total).round();
+        obj.insert(
+            "progress".into(),
+            serde_json::json!([current as i64, total as i64]),
+        );
+    }
+    let tmp = file.with_extension("json.word-hoard");
+    std::fs::write(
+        &tmp,
+        serde_json::to_vec(&json).map_err(crate::kobo::epub::io_err)?,
+    )?;
+    std::fs::rename(&tmp, file)?;
+    Ok(())
 }
 
 /// The books as a snapshot for [`crate::Library::import`]. `title_for`

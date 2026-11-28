@@ -191,7 +191,10 @@ pub(crate) mod tests {
              CREATE TABLE content (
                 ContentID TEXT, ContentType INTEGER, Title TEXT, Attribution TEXT,
                 Description TEXT, Publisher TEXT, Series TEXT, SeriesNumber TEXT,
-                SeriesNumberFloat REAL, SeriesID TEXT, BookID TEXT);
+                SeriesNumberFloat REAL, SeriesID TEXT, BookID TEXT,
+                ChapterIDBookmarked TEXT, ___PercentRead INTEGER DEFAULT 0,
+                DateLastRead TEXT, ReadStatus INTEGER DEFAULT 0,
+                FirstTimeReading TEXT DEFAULT 'true');
              CREATE TABLE volume_shortcovers (volumeId TEXT, shortcoverId TEXT);
              INSERT INTO volume_shortcovers VALUES ('file:///mnt/onboard/Books/H/Hammer.kepub.epub', 'ch1');
              CREATE TABLE ShelfContent (ShelfName TEXT, ContentId TEXT);

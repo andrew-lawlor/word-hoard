@@ -622,6 +622,7 @@ impl Window {
     /// is backed up first, and only when something changes.
     fn update_kobo_details(self: &Rc<Self>, mount: PathBuf) {
         if self.flag(KOBO_DETAILS_OFF) || self.sending.get() {
+            self.sync_positions();
             return;
         }
         let Some(db) = self.lib.borrow().path().map(std::path::Path::to_path_buf) else {
@@ -645,6 +646,8 @@ impl Window {
                 Ok(Err(err)) => this.error("Couldn’t Update Book Details on the Kobo", err),
                 Err(_) => {}
             }
+            // Then the reading position, one write to the Kobo at a time.
+            this.sync_positions();
         });
     }
 }

@@ -22,7 +22,7 @@ pub struct SourceProgress {
 }
 
 /// An EPUB identifier as compared: no `urn:uuid:` prefix, lower case.
-fn plain_uid(uid: &str) -> String {
+pub(super) fn plain_uid(uid: &str) -> String {
     let uid = uid.trim();
     uid.strip_prefix("urn:uuid:")
         .unwrap_or(uid)

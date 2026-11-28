@@ -403,4 +403,17 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE book_source ADD COLUMN percent_read INTEGER;
     ALTER TABLE book_source ADD COLUMN last_read_at TEXT;
     "#,
+    // 15: the reading positions last synced between the Kobo and Foliate
+    // (each reader's as Word Hoard left it, and as it was just before), so
+    // a position counts as moved only when the reader moved it.
+    r#"
+    CREATE TABLE position_sync (
+        book_id        INTEGER PRIMARY KEY REFERENCES book(id) ON DELETE CASCADE,
+        kobo           TEXT,
+        kobo_before    TEXT,
+        foliate        TEXT,
+        foliate_before TEXT,
+        synced_at      TEXT NOT NULL
+    );
+    "#,
 ];

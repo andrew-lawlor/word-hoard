@@ -22,6 +22,17 @@ use chrono::Utc;
 use super::device::{DB_RELATIVE_PATH, DeviceInfo, is_kobo_mount};
 use crate::{Error, Result};
 
+/// Where a sideloaded book is open on the Kobo.
+#[derive(Debug, Clone)]
+pub struct KoboPosition {
+    /// The book's `ContentID` (`file:///mnt/onboard/…`).
+    pub content_id: String,
+    /// `chapter.xhtml#kobo.P.S`, as in `ChapterIDBookmarked`.
+    pub location: String,
+    pub percent_read: i64,
+    pub read_at: chrono::DateTime<chrono::Utc>,
+}
+
 pub struct DeviceWriter {
     mount: PathBuf,
     info: DeviceInfo,
@@ -139,6 +150,38 @@ impl DeviceWriter {
             return Err(Error::UntestedKoboDb(version));
         }
         super::details::write(&mut conn, updates)
+    }
+
+    /// Sets where sideloaded books are open on the Kobo (see
+    /// [`KoboPosition`]), in one transaction, after the backup this writer
+    /// made when it opened; verified database versions only. Only the
+    /// position, percent read, when last read, and that the book has been
+    /// opened. Returns how many books changed.
+    pub fn set_positions(&self, positions: &[KoboPosition]) -> Result<usize> {
+        let mut conn =
+            rusqlite::Connection::open(self.mount.join(super::device::DB_RELATIVE_PATH))?;
+        let version = super::details::db_version(&conn)?.unwrap_or(0);
+        if !super::model::is_tested_db_version(version) {
+            return Err(Error::UntestedKoboDb(version));
+        }
+        let tx = conn.transaction()?;
+        let mut changed = 0;
+        for p in positions {
+            changed += tx.execute(
+                "UPDATE content SET ChapterIDBookmarked = ?2, ___PercentRead = ?3,
+                    DateLastRead = ?4, FirstTimeReading = 'false',
+                    ReadStatus = CASE WHEN ReadStatus = 0 THEN 1 ELSE ReadStatus END
+                 WHERE ContentID = ?1 AND ContentType = 6 AND ContentID LIKE 'file:///mnt/onboard/%'",
+                rusqlite::params![
+                    p.content_id,
+                    p.location,
+                    p.percent_read,
+                    p.read_at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed)
     }
 
     /// Removes sideloaded books from the Kobo: first their records in its

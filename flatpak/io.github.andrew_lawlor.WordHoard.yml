@@ -14,7 +14,8 @@ finish-args:
   - --device=dri
   # --device=dri also lets handwriting transcription use the GPU (Vulkan).
   # Kobo e-readers mount here. Word Hoard reads a copy of the Kobo's database;
-  # it writes only to send books (after backing up that database).
+  # it writes only to send, update or remove books, keep their details and
+  # reading position in step (always after backing up that database).
   - --filesystem=/media
   - --filesystem=/run/media
   # The library folder: books, plus a hidden .word-hoard folder with the
@@ -22,6 +23,10 @@ finish-args:
   # folder (a synced one, say), and SQLite needs real file access there
   # (the document portal won't do), so Word Hoard can reach the home folder.
   - --filesystem=home
+  # Foliate's highlights and reading positions (one file per book). `home`
+  # doesn't reach other apps' Flatpak data. Read to import; written only to
+  # sync the reading position, when turned on.
+  - --filesystem=~/.var/app/com.github.johnfactotum.Foliate/data/com.github.johnfactotum.Foliate
   # Mount a plugged-in Kobo where the desktop doesn't (no gvfs, as on KDE).
   - --system-talk-name=org.freedesktop.UDisks2
   # Notice when the Kobo is plugged in, and eject it (gvfs / UDisks2).

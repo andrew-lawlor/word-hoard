@@ -472,20 +472,7 @@ impl Library {
     /// and only if something differs, backs it up (into `backups`) and
     /// writes the differences. Returns how many books changed.
     pub fn update_kobo_details(&self, mount: &Path, backups: &Path) -> Result<usize> {
-        let work = tempfile::Builder::new()
-            .prefix("word-hoard-kobo-")
-            .tempdir()?;
-        let copy = work.path().join("KoboReader.sqlite");
-        std::fs::copy(mount.join(crate::kobo::device::DB_RELATIVE_PATH), &copy)?;
-        for suffix in ["-wal", "-shm"] {
-            let side = mount.join(format!("{}{suffix}", crate::kobo::device::DB_RELATIVE_PATH));
-            if side.is_file() {
-                std::fs::copy(
-                    &side,
-                    work.path().join(format!("KoboReader.sqlite{suffix}")),
-                )?;
-            }
-        }
+        let (_work, copy) = super::positions::copy_kobo_db(mount)?;
         let on_kobo = crate::kobo::details::read_details(&copy)?;
         let changes = self.kobo_detail_changes(mount, &on_kobo)?;
         if changes.is_empty() {
