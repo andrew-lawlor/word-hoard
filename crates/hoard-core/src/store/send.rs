@@ -520,6 +520,40 @@ impl Library {
         Ok(on)
     }
 
+    /// Forgets the copies recorded on the Kobo mounted at `mount` whose file
+    /// is gone (deleted on the Kobo, or replaced by a copy elsewhere). The
+    /// book stays in the library, with its highlights. Returns how many were
+    /// forgotten; nothing is forgotten unless the Kobo's storage is readable.
+    pub fn forget_missing_copies(&self, mount: &Path) -> Result<usize> {
+        let device = DeviceInfo::identify(mount)?;
+        if std::fs::read_dir(mount).is_err() {
+            return Ok(0);
+        }
+        let volumes: Vec<String> = self
+            .conn
+            .prepare(
+                "SELECT s.volume_id FROM book_source s JOIN device d ON d.id = s.device_id
+                 WHERE d.serial = ?1",
+            )?
+            .query_map([&device.serial], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut forgotten = 0;
+        for volume in volumes {
+            let Some(rel) = volume.strip_prefix("file:///mnt/onboard/") else {
+                continue;
+            };
+            if mount.join(rel).exists() {
+                continue;
+            }
+            forgotten += self.conn.execute(
+                "DELETE FROM book_source WHERE volume_id = ?2
+                 AND device_id = (SELECT id FROM device WHERE serial = ?1)",
+                params![device.serial, volume],
+            )?;
+        }
+        Ok(forgotten)
+    }
+
     pub(crate) fn upsert_device(&self, d: &DeviceInfo) -> Result<i64> {
         Ok(self.conn.query_row(
             "INSERT INTO device (serial, model_id, firmware, first_seen_at, last_seen_at)
@@ -782,6 +816,42 @@ mod tests {
         let plan = lib.plan_send_with(&kobo, &[second], true).unwrap();
         assert_eq!(plan.items[0].dest, dests[0]);
         assert!(plan.items[0].replace);
+    }
+
+    #[test]
+    fn forgets_copies_whose_file_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fake_kobo(&kobo);
+        let lib = Library::open(&dir.path().join("data/library.db")).unwrap();
+        lib.set_books_root(&dir.path().join("Books")).unwrap();
+        let src = dir.path().join("dune.epub");
+        epub(&src, "Dune", "Frank Herbert");
+        let dune = lib.add_file(&src, AddMode::Copy).unwrap().book_id;
+        let plan = lib.plan_send(&kobo, &[dune]).unwrap();
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        lib.apply_send(&writer, &plan, |_, _| {}).unwrap();
+        // An older copy, sideloaded before and since deleted from the Kobo.
+        let device = lib
+            .upsert_device(&DeviceInfo::identify(&kobo).unwrap())
+            .unwrap();
+        lib.conn
+            .execute(
+                "INSERT INTO book_source (device_id, volume_id, book_id)
+                 VALUES (?1, 'file:///mnt/onboard/Herbert, Frank/Dune - Frank Herbert.kepub.epub', ?2)",
+                params![device, dune],
+            )
+            .unwrap();
+        let count = |lib: &Library| -> i64 {
+            lib.conn
+                .query_row("SELECT count(*) FROM book_source", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count(&lib), 2);
+        assert_eq!(lib.forget_missing_copies(&kobo).unwrap(), 1);
+        assert_eq!(count(&lib), 1, "the copy that's there is kept");
+        assert_eq!(lib.books_on_device(&kobo).unwrap(), [dune].into());
+        assert_eq!(lib.forget_missing_copies(&kobo).unwrap(), 0);
     }
 
     #[test]

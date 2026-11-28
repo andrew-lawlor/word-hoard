@@ -82,6 +82,9 @@ impl Window {
                             }
                             lib.set_word_contexts(&device, &contexts)?;
                             lib.set_markup_contexts(&device, &markup_words)?;
+                            if is_connected {
+                                lib.forget_missing_copies(&path_for_details)?;
+                            }
                             Ok((stats, assets.err(), device, snapshot.db_version))
                         })
                         .map_err(|e| e.to_string())

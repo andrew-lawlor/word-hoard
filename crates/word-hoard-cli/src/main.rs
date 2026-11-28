@@ -348,6 +348,9 @@ fn import(path: &Path, library_path: &Path, dry_run: bool) -> Result<()> {
         }
         lib.set_word_contexts(&device, &find_word_contexts(path, &snapshot, 5))?;
         lib.set_markup_contexts(&device, &markup_contexts(path, &snapshot))?;
+        if path.join(".kobo").is_dir() {
+            lib.forget_missing_copies(path)?;
+        }
     }
     println!(
         "{} from {}{}",
