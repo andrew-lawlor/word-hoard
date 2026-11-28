@@ -167,6 +167,10 @@ impl Library {
             serial: device.serial.clone(),
             ..Default::default()
         };
+        // Destinations taken by earlier books in this plan (the Kobo's
+        // FAT storage ignores case).
+        let mut planned = std::collections::HashSet::new();
+        let dest_key = |d: &Path| d.to_string_lossy().to_lowercase();
         for &id in book_ids {
             let Some(book) = self.book(id)? else { continue };
             let skip = |reason: &str| Skipped {
@@ -240,16 +244,36 @@ impl Library {
             } else {
                 "kepub.epub"
             };
-            let dest = PathBuf::from(safe_component(&folder))
-                .join(safe_component(&author_folder))
-                .join(format!("{}.{ext}", safe_component(&book.title)));
-            let dest = existing.clone().filter(|_| replace).unwrap_or(dest);
-            let replacing = replace && mount.join(&dest).is_file();
-            if mount.join(&dest).exists() && !replacing {
-                plan.skipped
-                    .push(skip("a file by that name is already on the Kobo"));
-                continue;
-            }
+            let dir = PathBuf::from(safe_component(&folder)).join(safe_component(&author_folder));
+            let replacing = replace && existing.is_some();
+            let dest = match existing.clone().filter(|_| replace) {
+                Some(dest) => dest,
+                None => {
+                    // Another book of the same title (a second translation,
+                    // say) gets its own name: its library folder's
+                    // ("The Iliad (2023)"), or a number.
+                    let title = safe_component(&book.title);
+                    let library_name = file
+                        .path
+                        .parent()
+                        .and_then(Path::file_name)
+                        .map(|n| safe_component(&n.to_string_lossy()))
+                        .filter(|n| n != &title && n.starts_with(&title));
+                    let names = std::iter::once(title.clone())
+                        .chain(library_name)
+                        .chain((2..100).map(|n| format!("{title} ({n})")));
+                    let free = names
+                        .map(|name| dir.join(format!("{name}.{ext}")))
+                        .find(|d| !mount.join(d).exists() && !planned.contains(&dest_key(d)));
+                    let Some(dest) = free else {
+                        plan.skipped
+                            .push(skip("a file by that name is already on the Kobo"));
+                        continue;
+                    };
+                    dest
+                }
+            };
+            planned.insert(dest_key(&dest));
             plan.items.push(SendItem {
                 book_id: id,
                 title: book.title.clone(),
@@ -674,6 +698,90 @@ mod tests {
             "not on this Kobo"
         );
         assert_eq!(lib.plan_send(&kobo, &[dune]).unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn books_with_the_same_title_get_their_own_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let kobo = dir.path().join("KOBOeReader");
+        fake_kobo(&kobo);
+        let lib = Library::open(&dir.path().join("data/library.db")).unwrap();
+        lib.set_books_root(&dir.path().join("Books")).unwrap();
+        let translation = |n: u32| {
+            let src = dir.path().join(format!("iliad{n}.epub"));
+            write_epub(
+                &src,
+                &format!(
+                    r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>The Iliad</dc:title><dc:creator>Homer</dc:creator><dc:identifier id="id">urn:uuid:iliad-{n}</dc:identifier></metadata></package>"#
+                ),
+            );
+            let added = lib.add_file(&src, AddMode::Copy).unwrap();
+            // The library would take a second Iliad by the same author as
+            // another file of the first; make each its own book, as a
+            // Calibre import with different authors does.
+            if n > 1 {
+                lib.conn
+                    .execute(
+                        "INSERT INTO book (fingerprint, title, author, created_at, updated_at)
+                         VALUES (?1, 'The Iliad', 'Homer', '2026-01-01', '2026-01-01')",
+                        [format!("iliad-{n}")],
+                    )
+                    .unwrap();
+                let id = lib.conn.last_insert_rowid();
+                lib.conn
+                    .execute(
+                        "UPDATE book_file SET book_id = ?1 WHERE path LIKE ?2",
+                        rusqlite::params![
+                            id,
+                            format!(
+                                "%{}",
+                                added
+                                    .path
+                                    .strip_prefix(dir.path().join("Books"))
+                                    .unwrap()
+                                    .display()
+                            )
+                        ],
+                    )
+                    .unwrap();
+                return id;
+            }
+            added.book_id
+        };
+        let (first, second, third) = (translation(1), translation(2), translation(3));
+        assert!(first != second && second != third);
+        let writer = DeviceWriter::open(&kobo, &dir.path().join("backups")).unwrap();
+        let plan = lib.plan_send(&kobo, &[first]).unwrap();
+        assert_eq!(
+            plan.items[0].dest,
+            Path::new("Books/Homer/The Iliad.kepub.epub")
+        );
+        lib.apply_send(&writer, &plan, |_, _| {}).unwrap();
+
+        // Later, two more of the same title in one send: neither takes the
+        // first's name, nor each other's.
+        let plan = lib.plan_send(&kobo, &[second, third]).unwrap();
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+        let dests: Vec<_> = plan.items.iter().map(|i| i.dest.clone()).collect();
+        assert_eq!(dests.len(), 2);
+        assert_ne!(dests[0], dests[1]);
+        for d in &dests {
+            assert_ne!(d, Path::new("Books/Homer/The Iliad.kepub.epub"));
+            let name = d.file_name().unwrap().to_string_lossy();
+            assert!(
+                name.starts_with("The Iliad (") && name.ends_with(").kepub.epub"),
+                "{name}"
+            );
+        }
+        lib.apply_send(&writer, &plan, |_, _| {}).unwrap();
+        assert_eq!(
+            lib.books_on_device(&kobo).unwrap(),
+            [first, second, third].into()
+        );
+        // Updating keeps each book's own name.
+        let plan = lib.plan_send_with(&kobo, &[second], true).unwrap();
+        assert_eq!(plan.items[0].dest, dests[0]);
+        assert!(plan.items[0].replace);
     }
 
     #[test]
