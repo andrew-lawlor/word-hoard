@@ -52,6 +52,19 @@ enum Command {
     },
     /// Show what the library contains.
     Library,
+    /// Show where a reading position is in a book: its text, how far
+    /// through, and the same place as a CFI (Foliate) and a Kobo span. Give
+    /// the position as an EPUB CFI or a Kobo `chapter.xhtml#kobo.P.S`.
+    Position {
+        /// The EPUB or KEPUB the position is in.
+        book: PathBuf,
+        /// The position.
+        at: String,
+        /// Another copy of the book to find the same place in (the Kobo's
+        /// copy for a CFI, the library's EPUB for a Kobo position).
+        #[arg(long)]
+        other: Option<PathBuf>,
+    },
     /// Send books to a Kobo (EPUBs converted to KEPUB). Shows what would be
     /// written; nothing is written without --yes.
     Send {
@@ -201,6 +214,7 @@ fn main() -> Result<()> {
         Command::Report { path, output } => report(&path, output.as_deref()),
         Command::Import { path, dry_run } => import(&path, &library_path, dry_run),
         Command::Library => library(&library_path),
+        Command::Position { book, at, other } => position(&book, &at, other.as_deref()),
         Command::Send {
             mount,
             search,
@@ -332,6 +346,43 @@ fn warn_if_untested(snapshot: &KoboSnapshot) {
 }
 
 const ISSUES_URL: &str = "https://github.com/andrew-lawlor/word-hoard/issues";
+
+fn position(book: &Path, at: &str, other: Option<&Path>) -> Result<()> {
+    use hoard_core::position::BookText;
+    let text = BookText::open(book)?;
+    let spot = if at.starts_with("epubcfi(") {
+        text.from_cfi(at)
+    } else {
+        text.from_kobo(at)
+    };
+    let Some(spot) = spot else {
+        println!("Not found in {}.", book.display());
+        return Ok(());
+    };
+    let show = |t: &BookText, label: &str| {
+        println!(
+            "{label}: chapter {} (spine), {} in",
+            spot.spine, spot.offset
+        );
+        println!("  {:.1}% through", t.fraction(spot) * 100.0);
+        println!("  \"{}…\"", t.text_at(spot, 80));
+        println!("  CFI:  {}", t.to_cfi(spot).unwrap_or_else(|| "-".into()));
+        println!(
+            "  Kobo: {}",
+            t.to_kobo(spot).unwrap_or_else(|| "- (no koboSpans)".into())
+        );
+    };
+    show(&text, &book.display().to_string());
+    if let Some(other) = other {
+        let o = BookText::open(other)?;
+        println!(
+            "Same text: {}",
+            if text.same_text(&o) { "yes" } else { "NO" }
+        );
+        show(&o, &other.display().to_string());
+    }
+    Ok(())
+}
 
 fn import(path: &Path, library_path: &Path, dry_run: bool) -> Result<()> {
     let device = DeviceInfo::identify(path)?;

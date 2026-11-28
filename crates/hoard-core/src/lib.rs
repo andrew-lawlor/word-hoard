@@ -13,6 +13,7 @@ pub mod kobo;
 pub mod koreader;
 pub mod markup;
 pub mod normalize;
+pub mod position;
 pub mod store;
 
 pub use error::{Error, Result};

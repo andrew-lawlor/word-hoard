@@ -591,4 +591,36 @@ pub(crate) mod tests {
         zip.write_all(opf.as_bytes()).unwrap();
         zip.finish().unwrap();
     }
+
+    /// An EPUB whose spine is `chapters` (zip path, XHTML), in order.
+    pub(crate) fn write_epub_with(path: &Path, chapters: &[(&str, &str)]) {
+        use std::io::Write;
+        let mut manifest = String::new();
+        let mut spine = String::new();
+        for (i, (name, _)) in chapters.iter().enumerate() {
+            let href = name.strip_prefix("OEBPS/").unwrap_or(name);
+            manifest.push_str(&format!(
+                r#"<item id="c{i}" href="{href}" media-type="application/xhtml+xml"/>"#
+            ));
+            spine.push_str(&format!(r#"<itemref idref="c{i}"/>"#));
+        }
+        let opf = format!(
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:identifier id="id">urn:uuid:t</dc:identifier></metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>"#
+        );
+        write_epub(path, &opf);
+        let mut zip = zip::ZipWriter::new_append(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .unwrap(),
+        )
+        .unwrap();
+        for (name, xhtml) in chapters {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(xhtml.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
 }
